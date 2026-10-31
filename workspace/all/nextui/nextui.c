@@ -11,6 +11,9 @@
 #include "api.h"
 #include "utils.h"
 #include "config.h"
+#ifdef PLATFORM_MY355
+#include <sys/inotify.h>
+#endif
 #if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
 #include "video/vidplayer.h"
 #endif
@@ -2189,6 +2192,57 @@ static int videoPreviewTick(int currentScreen) {
 	return 1;
 }
 
+#ifdef PLATFORM_MY355
+// Watch completed route writes, including a replacement within the same sink
+// class (Bluetooth A -> Bluetooth B). IN_MODIFY can expose a truncated file.
+static int videoPreviewAudioRouteChanged(void) {
+	static int initialized = 0;
+	static int route_fd = -1;
+	if (!initialized) {
+		initialized = 1;
+		route_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+		if (route_fd >= 0 && inotify_add_watch(route_fd, USERDATA_PATH,
+			IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE) < 0) {
+			close(route_fd);
+			route_fd = -1;
+		}
+		if (route_fd < 0)
+			LOG_warn("video preview: audio route watch unavailable; sink-class changes only\n");
+	}
+	if (route_fd < 0) return 0; // Sink-enum changes still refresh without a watch.
+
+	int changed = 0;
+	union { struct inotify_event align; char bytes[4096]; } events;
+	ssize_t count;
+	while ((count = read(route_fd, events.bytes, sizeof(events.bytes))) > 0) {
+		for (size_t offset = 0; offset < (size_t)count;) {
+			struct inotify_event *event = (void *)(events.bytes + offset);
+			if ((event->mask & IN_Q_OVERFLOW) ||
+				(event->len && strcmp(event->name, ".asoundrc") == 0))
+				changed = 1;
+			offset += sizeof(*event) + event->len;
+		}
+	}
+	return changed;
+}
+
+static void videoPreviewRefreshAudioRoute(void) {
+	char path[sizeof(video_preview_path)];
+	snprintf(path, sizeof(path), "%s", video_preview_path);
+	int rearm = video_preview_armed || video_preview_playing;
+	videoPreviewStop();
+	// Stop consumes outstanding requests and closes the preview PCM under the
+	// worker mutex. The next VIDA_open refreshes ALSA's cached route before
+	// opening another PCM; the frontend never creates a game-audio device.
+	VIDP_stopAndWait();
+	if (rearm && CFG_getShowGameVideo() && path[0]) {
+		snprintf(video_preview_path, sizeof(video_preview_path), "%s", path);
+		video_preview_armed = exists(video_preview_path);
+		video_preview_rest_ms = SDL_GetTicks();
+	}
+}
+#endif
+
 // Called by PWR_update on the way into sleep and on the way into power-off,
 // before either happens.
 //
@@ -2540,6 +2594,13 @@ int main (int argc, char *argv[]) {
         had_bt = has_bt;
 
 		int has_sink = GetAudioSink();
+#if defined(PLATFORM_MY355) && HAS_VIDEO_PREVIEWS
+		// Drain file events even when the enum changed, so one route update
+		// cannot restart the same clip again on the next frame.
+		int route_changed = videoPreviewAudioRouteChanged();
+		if (had_sink != has_sink || route_changed)
+			videoPreviewRefreshAudioRoute();
+#endif
 		if (had_sink != has_sink)
 			dirty = 1;
 		had_sink = has_sink;

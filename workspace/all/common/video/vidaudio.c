@@ -10,6 +10,9 @@
 #include "defines.h"
 #include "api.h"
 #include "sdl.h"
+#ifdef PLATFORM_MY355
+#include <dlfcn.h>
+#endif
 
 #include "pcm.h"
 
@@ -181,6 +184,19 @@ static void vida_fade_out(void)
 	SDL_Delay(VIDA_FADE_MS + 20);
 }
 
+#ifdef PLATFORM_MY355
+// Called only before opening a fresh PCM, after any previous device has
+// closed. SDL keeps its ALSA backend loaded across previews and suspend, so
+// closing a PCM alone does not discard the old ~/.asoundrc configuration.
+static void vida_refresh_alsa_config(void) {
+	void *lib = dlopen("libasound.so.2", RTLD_LAZY | RTLD_NOLOAD);
+	if (!lib) return; // Do not load ALSA for a different SDL audio backend.
+	int (*free_config)(void) = (int (*)(void))dlsym(lib, "snd_config_update_free_global");
+	if (free_config) free_config();
+	dlclose(lib);
+}
+#endif
+
 bool VIDA_open(int rate, char *reason, size_t reason_size)
 {
 	if (rate <= 0) {
@@ -235,6 +251,9 @@ bool VIDA_open(int rate, char *reason, size_t reason_size)
 	// exactly this format and rate, and builds its own converting stream when
 	// the hardware wants something else. Allowing changes would push that
 	// conversion back onto us and cost a resampler.
+#ifdef PLATFORM_MY355
+	vida_refresh_alsa_config();
+#endif
 	vida.device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
 	if (vida.device == 0) {
 		snprintf(reason, reason_size, "SDL_OpenAudioDevice: %s", SDL_GetError());
