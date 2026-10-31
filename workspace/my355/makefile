@@ -15,17 +15,23 @@ REQUIRES_MKBOOTIMG=other/mkbootimg
 REQUIRES_RSCEGO=other/rsce-go
 REQUIRES_FILEMGR=other/NextCommander
 
+.PHONY: ffmpeg-runtime
+
 all: readmes
 	cd other/squashfs && make
 
-early: $(REQUIRES_EVTEST) $(REQUIRES_MKBOOTIMG) $(REQUIRES_RSCEGO) $(REQUIRES_FILEMGR)
+early: ffmpeg-runtime $(REQUIRES_EVTEST) $(REQUIRES_MKBOOTIMG) $(REQUIRES_RSCEGO) $(REQUIRES_FILEMGR)
 	mkdir -p other
 	cd $(REQUIRES_FILEMGR) && make -j
 	cd $(REQUIRES_EVTEST) && $(CROSS_COMPILE)gcc -o evtest evtest.c
 	cd $(REQUIRES_MKBOOTIMG) && make
 	cd $(REQUIRES_RSCEGO) && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o rsce_tool
 
+ffmpeg-runtime: ffmpeg/build.sh
+	cd ffmpeg && sh build.sh
+
 clean:
+	rm -rf ffmpeg/output ffmpeg/ffmpeg-*/
 	cd $(REQUIRES_FILEMGR) && make clean
 
 ###########################################################

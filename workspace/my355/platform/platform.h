@@ -5,6 +5,9 @@
 
 #define PLATFORM_MY355 1
 
+// Shared SDL streaming texture renderer and lazily loaded FFmpeg runtime.
+#define HAS_VIDEO_PREVIEWS 1
+
 ///////////////////////////////
 
 #ifdef SDL

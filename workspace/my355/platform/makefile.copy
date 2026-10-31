@@ -16,3 +16,8 @@ $(PLATFORM):
 	cp ./workspace/$@/other/mkbootimg/mkbootimg ./build/EXTRAS/Tools/$@/Bootlogo.pak/payload/bin/
 	cp ./workspace/$@/other/mkbootimg/unpackbootimg ./build/EXTRAS/Tools/$@/Bootlogo.pak/payload/bin/
 	cp ./workspace/$@/other/rsce-go/rsce_tool ./build/EXTRAS/Tools/$@/Bootlogo.pak/payload/bin/
+
+	# Optional preview runtime: real files named by their ABI sonames for FAT.
+	cp -L ./workspace/$@/ffmpeg/output/lib/libavutil.so.58 ./build/SYSTEM/$@/lib/
+	cp -L ./workspace/$@/ffmpeg/output/lib/libavcodec.so.60 ./build/SYSTEM/$@/lib/
+	cp -L ./workspace/$@/ffmpeg/output/lib/libavformat.so.60 ./build/SYSTEM/$@/lib/

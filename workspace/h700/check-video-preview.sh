@@ -17,14 +17,15 @@
 set -euo pipefail
 
 root=${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+platform=${VIDEO_PREVIEW_PLATFORM:-h700}
 video="$root/workspace/all/common/video"
 vidaudio="$root/workspace/all/common/video/vidaudio.c"
-ffmpeg_build="$root/workspace/h700/ffmpeg/build.sh"
+ffmpeg_build="$root/workspace/$platform/ffmpeg/build.sh"
 nextui_c="$root/workspace/all/nextui/nextui.c"
 nextui_mk="$root/workspace/all/nextui/makefile"
 generic_video="$root/workspace/all/common/generic_video.c"
 api_c="$root/workspace/all/common/api.c"
-elf="${NEXTUI_ELF:-$root/workspace/all/nextui/build/h700/nextui.elf}"
+elf="${NEXTUI_ELF:-$root/workspace/all/nextui/build/$platform/nextui.elf}"
 tmp=$(mktemp -d); trap 'rm -rf -- "$tmp"' EXIT
 fail=0
 note() { printf 'ok   %s\n' "$1"; }

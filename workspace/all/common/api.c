@@ -3220,6 +3220,7 @@ void SND_init(double sample_rate, double frame_rate)
 	{
 		LOG_info("SDL_OpenAudioDevice error: %s\n", SDL_GetError());
 
+#ifdef PLATFORM_MY355
 		// The default device can name a card that is gone (a .asoundrc left
 		// behind by a sink that went away), which would otherwise cost us audio
 		// for the rest of the session.
@@ -3236,6 +3237,14 @@ void SND_init(double sample_rate, double frame_rate)
 		SDL_QuitSubSystem(SDL_INIT_AUDIO);
 		return;
 	}
+#else
+		if (SDL_OpenAudio(&spec_in, &spec_out) < 0) {
+			LOG_info("SDL_OpenAudio error: %s\n", SDL_GetError());
+			SDL_QuitSubSystem(SDL_INIT_AUDIO);
+			return;
+		}
+	}
+#endif
 #else
 	if (SDL_OpenAudio(&spec_in, &spec_out) < 0) {
 		LOG_info("SDL_OpenAudio error: %s\n", SDL_GetError());
@@ -3292,6 +3301,7 @@ void SND_quit(void)
 	}
 }
 
+#ifdef PLATFORM_MY355
 // alsa-lib caches ~/.asoundrc for the life of the process, so a reopen would
 // still resolve "default" to the sink that just went away. This is the only way
 // to force a re-read. No-op where libasound isn't loaded.
@@ -3305,11 +3315,14 @@ static void SND_dropALSAConfigCache(void)
 
 	dlclose(lib);
 }
+#endif
 
 void SND_resetAudio(double sample_rate, double frame_rate)
 {
 	SND_quit();
+#ifdef PLATFORM_MY355
 	SND_dropALSAConfigCache(); // needs every pcm/ctl handle closed
+#endif
 	SND_init(sample_rate, frame_rate);
 }
 
@@ -4235,7 +4248,11 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 	if (
 		pwr.requested_sleep ||											   // hardware requested sleep
 		(screenOffDelay > 0 && now - last_input_at >= screenOffDelay) ||   // autosleep
-		(pwr.can_sleep && PAD_justReleased(BTN_SLEEP) && (power_pressed_at || !lid.is_open)) // manual sleep
+		(pwr.can_sleep && PAD_justReleased(BTN_SLEEP) && (power_pressed_at
+#ifdef PLATFORM_MY355
+			|| !lid.is_open
+#endif
+		))) // manual sleep
 	)
 	{
 		pwr.requested_sleep = 0;

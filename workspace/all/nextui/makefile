@@ -28,7 +28,7 @@ TARGET = nextui
 # fails if that ever happens, and reads both this line and the built ELF.
 INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 SOURCE = $(TARGET).c ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
-ifeq ($(PLATFORM),h700)
+ifneq (,$(filter $(PLATFORM),h700 my355))
 INCDIR += -I../../$(PLATFORM)/ffmpeg/output/include
 SOURCE += ../common/video/vidload.c ../common/video/vidplayer.c ../common/video/vidaudio.c
 endif
