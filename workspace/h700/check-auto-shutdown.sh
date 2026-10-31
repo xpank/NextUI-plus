@@ -333,6 +333,21 @@ as_disarm
 [ "$(cat "$as_rtc/wakealarm")" = 0 ] && [ -z "$as_armed" ]
 check $? "as_disarm clears the alarm and the armed flag"
 
+as_secs=0; echo 9999 > "$as_rtc/wakealarm"
+as_clear_alarm
+[ "$(cat "$as_rtc/wakealarm")" = 0 ]
+check $? "boot cleanup clears a stale alarm even if the setting is now Never"
+as_rtc="$tmp/missing-rtc"
+as_clear_alarm
+check $? "boot cleanup tolerates a missing RTC"
+has "$SUSPEND" 'if [ "${1:-}" = "--clear-auto-shutdown-alarm" ]; then' "suspend offers a dedicated cleanup mode"
+sed "s@^as_rtc=/sys/class/rtc/rtc1\$@as_rtc=$tmp/rtc@" "$SUSPEND" > "$tmp/cleanup.sh"
+echo 9999 > "$tmp/rtc/wakealarm"
+sh "$tmp/cleanup.sh" --clear-auto-shutdown-alarm > "$tmp/cleanup.out" 2>&1
+[ $? = 0 ] && [ "$(cat "$tmp/rtc/wakealarm")" = 0 ] && [ ! -s "$tmp/cleanup.out" ]
+check $? "the complete cleanup mode exits silently before any suspend preparation"
+has "$here/skeleton/SYSTEM/h700/paks/MinUI.pak/launch.sh" '"$SYSTEM_PATH/bin/suspend" --clear-auto-shutdown-alarm' "the shipped launcher runs boot cleanup"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

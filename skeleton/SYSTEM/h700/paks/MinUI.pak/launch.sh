@@ -28,6 +28,11 @@ export PATH="$SYSTEM_PATH/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export LD_LIBRARY_PATH="$SYSTEM_PATH/lib:/usr/lib:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
 h700_setup_runtime
 
+# Drop an RTC alarm left by an interrupted auto-power-off session.
+if [ -x "$SYSTEM_PATH/bin/suspend" ]; then
+	"$SYSTEM_PATH/bin/suspend" --clear-auto-shutdown-alarm >/dev/null 2>&1 || true
+fi
+
 #######################################
 
 h700_shutdown() {

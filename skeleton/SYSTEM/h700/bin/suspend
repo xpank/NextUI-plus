@@ -93,12 +93,10 @@ after_async() {
 # no post-resume hook ever runs.  Measured: three alarm wakes produced three
 # re-suspends and a single post-resume run, at the very end.
 #
-# Powering off is done by exiting non-zero.  PWR_deepSleep() maps any non-zero
-# exit of this script to -1 and PWR_waitForWake() answers -1 with
-# PWR_powerOff(0) -- NextUI's ordinary clean shutdown (autosave, /tmp/poweroff,
-# baseos_flush_state; poweroff_next).  A distinct code is used so the log can
-# tell an auto shutdown apart from a genuine suspend failure, which exits
-# non-zero too and is also answered with a power off.
+# Exit 42 requests PWR_powerOff(0): autosave, /tmp/poweroff, then the launcher's
+# ordinary shutdown path. Modern BaseOS uses its init-managed poweroff helper;
+# stock and older BaseOS retain the legacy path. Other non-zero exit codes
+# indicate a suspend failure.
 #
 # Everything below is inert while the timeout is zero ("Never", the default):
 # every function returns before it touches a device node, no alarm is armed and
@@ -158,9 +156,14 @@ as_log() {
 	return 0
 }
 
+as_clear_alarm() {
+	[ -w "$as_rtc/wakealarm" ] && echo 0 > "$as_rtc/wakealarm" 2>/dev/null
+	return 0
+}
+
 as_disarm() {
 	[ "$as_secs" -gt 0 ] || return 0
-	[ -w "$as_rtc/wakealarm" ] && echo 0 > "$as_rtc/wakealarm" 2>/dev/null
+	as_clear_alarm
 	as_armed=
 	return 0
 }
@@ -215,6 +218,13 @@ as_user_woke() {
 	[ "$as_hall0" = "0" ] && [ "$(as_hall)" = "1" ] && return 0
 	return 1
 }
+
+# The launcher uses this once at boot to clear alarms left by an interrupted
+# session. NextUI owns rtc1; no user hook is needed. Never enter suspend here.
+if [ "${1:-}" = "--clear-auto-shutdown-alarm" ]; then
+	as_clear_alarm
+	exit 0
+fi
 
 as_read_timeout
 if [ "$as_secs" -gt 0 ]; then
@@ -292,8 +302,7 @@ while :; do
 		else
 			as_log "wake: alarm fired after ${as_secs}s asleep (lid=$(as_hall), battery=$(cat "$as_bat/capacity" 2>/dev/null)%); powering off"
 			as_disarm
-			# Non-zero exit -> PWR_deepSleep() returns -1 ->
-			# PWR_waitForWake() calls PWR_powerOff(0).  after_sync and
+			# Exit 42 -> PWR_waitForWake() calls PWR_powerOff(0). after_sync and
 			# after_async are deliberately skipped: syncsettings.elf
 			# would light the backlight, and restarting the radios and
 			# running post-resume hooks into a shutdown is pointless.
