@@ -1,6 +1,6 @@
 # NextUI-plus
 
-Unofficial NextUI fork for H700 devices, tested on RGSP. Adds optional video/audio previews, sleep auto-off, settings fixes, and BaseOS shutdown support.
+Unofficial NextUI fork for H700 devices and Miyoo Flip (BaseOS), tested on RGSP and Flip. Adds optional video/audio previews, sleep auto-off, settings fixes, and BaseOS shutdown support.
 
 https://github.com/user-attachments/assets/5f8d0c4a-7255-468e-99ba-f572b4242d95
 

@@ -26,6 +26,9 @@ mkdir -p "$LOGS_PATH"
 mkdir -p "$HOOKS_PATH"
 mkdir -p "$SHARED_USERDATA_PATH/.minui"
 
+# Clear only a matching alarm left by an interrupted auto-off session.
+"$SYSTEM_PATH/bin/suspend" --clear-auto-shutdown-alarm
+
 export DEVICE="my355"
 
 export IS_NEXT="yes"

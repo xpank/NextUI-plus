@@ -15,6 +15,215 @@ sleep_retval=
 wifid_running=
 bluetoothd_running=
 
+# BEGIN_MY355_AUTO_OFF_POLICY
+# Verified RK817 RTC child-alarm policy; no device I/O until initialized.
+fa_rtc_root=/sys/class/rtc
+fa_interrupts=/proc/interrupts
+fa_hall=/sys/devices/platform/hall-mh248/hallvalue
+fa_supply=/sys/class/power_supply
+fa_marker="${USERDATA_PATH:-/mnt/SDCARD/.userdata/my355}/.auto-shutdown-alarm"
+fa_lock=/tmp/nextui-my355-autooff.lock
+fa_active=0
+fa_owned=0
+fa_locked=0
+fa_deadline=0
+fa_secs=0
+fa_decision=ordinary
+
+fa_read() { timeout 2 cat "$1" 2>/dev/null; }
+fa_number() {
+	case "$1" in ''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+	# Bound shell arithmetic and reject octal-looking input before evaluation.
+	[ "${#1}" -le 11 ]
+}
+
+fa_clear_owned() {
+	[ "$fa_owned" = 1 ] || return 0
+	fa_current=$(fa_read "$fa_rtc/wakealarm") || return 0
+	if [ "$fa_current" = "$fa_deadline" ]; then
+		printf '0\n' > "$fa_rtc/wakealarm" 2>/dev/null || return 0
+		fa_current=$(fa_read "$fa_rtc/wakealarm") || return 0
+		case "$fa_current" in ''|0) ;; *) return 0 ;; esac
+	fi
+	# An empty or substituted alarm is no longer ours. A replacement survives.
+	rm -f "$fa_marker"
+	fa_owned=0
+	return 0
+}
+
+fa_finish() {
+	fa_clear_owned
+	if [ "$fa_locked" = 1 ]; then
+		rmdir "$fa_lock" 2>/dev/null || true
+		fa_locked=0
+	fi
+	return 0
+}
+
+fa_disable() { fa_clear_owned; fa_active=0; return 0; }
+
+# Only a previously recorded matching deadline may be cleared at startup.
+# This function does no RTC I/O if the persistent ownership marker is absent.
+fa_boot_cleanup() {
+	[ -r "$fa_marker" ] || return 0
+	command -v timeout >/dev/null 2>&1 || return 0
+	fa_saved=$(fa_read "$fa_marker") || return 0
+	set -- $fa_saved
+	[ "$#" = 2 ] || return 0
+	case "$1" in rtc[0-9]*) ;; *) return 0 ;; esac
+	case "${1#rtc}" in ''|*[!0-9]*) return 0 ;; esac
+	fa_number "$2" && [ "$2" -gt 0 ] || return 0
+	fa_saved_rtc=$fa_rtc_root/$1
+	case "$(fa_read "$fa_saved_rtc/name")" in rk808-rtc*) ;; *) return 0 ;; esac
+	fa_saved_alarm=$(fa_read "$fa_saved_rtc/wakealarm") || return 0
+	if [ "$fa_saved_alarm" = "$2" ]; then
+		printf '0\n' > "$fa_saved_rtc/wakealarm" 2>/dev/null || return 0
+		fa_saved_alarm=$(fa_read "$fa_saved_rtc/wakealarm") || return 0
+		case "$fa_saved_alarm" in ''|0) ;; *) return 0 ;; esac
+	fi
+	rm -f "$fa_marker"
+	return 0
+}
+
+# Fail on missing/duplicate child handlers; do not silently turn missing data
+# into zero. Sum every CPU column, independent of IRQ number or CPU count.
+fa_capture() {
+	fa_text=$(fa_read "$fa_interrupts") || return 1
+	fa_sample=$(printf '%s\n' "$fa_text" | awk '
+	{
+		if (NF<2) next
+		i=0
+		if ($(NF-1)=="RTC" && $NF=="alarm") i=1
+		else if ($NF=="hall_mh248") i=2
+		else if ($NF=="rk805_pwrkey_fall") i=3
+		else if ($NF=="rk805_pwrkey_rise") i=4
+		else if ($NF=="rk817_plug_in") i=5
+		else if ($NF=="rk817_plug_out") i=6
+		if (i) {
+			seen[i]++; n=0
+			for (j=2; j<=NF && $j ~ /^[0-9]+$/; j++) n+=$j
+			if (j==2) bad=1
+			value[i]=n
+		}
+	}
+	END {
+		for (i=1;i<=6;i++) if (seen[i]!=1) bad=1
+		if (bad) exit 1
+		for (i=1;i<=6;i++) printf "%s%.0f", (i==1?"":" "), value[i]
+		printf "\n"
+	}') || return 1
+	fa_hall_sample=$(fa_read "$fa_hall") || return 1
+	case "$fa_hall_sample" in 0|1) ;; *) return 1 ;; esac
+}
+
+# SECONDS is already taken from the shared autoShutdownTimeout config key by
+# the eventual integration. Zero is completely inert, including no lock/RTC I/O.
+fa_init() {
+	fa_active=0
+	fa_secs=$1
+	fa_number "$fa_secs" || return 0
+	[ "$fa_secs" -gt 0 ] && [ "$fa_secs" -le 28800 ] || return 0
+	command -v timeout >/dev/null 2>&1 || return 0
+	fa_matches=0
+	for fa_candidate in "$fa_rtc_root"/rtc[0-9]*; do
+		case "$(fa_read "$fa_candidate/name")" in
+			rk808-rtc*) fa_matches=$((fa_matches + 1)); fa_rtc=$fa_candidate ;;
+		esac
+	done
+	[ "$fa_matches" = 1 ] || return 0
+	[ -w "$fa_rtc/wakealarm" ] || return 0
+	[ "$(fa_read "$fa_rtc/device/power/wakeup")" = enabled ] || return 0
+	fa_current=$(fa_read "$fa_rtc/wakealarm") || return 0
+	case "$fa_current" in ''|0) ;; *) return 0 ;; esac
+	[ ! -e "$fa_marker" ] || return 0
+	mkdir "$fa_lock" 2>/dev/null || return 0
+	fa_locked=1
+	fa_active=1
+	return 0
+}
+
+# Called immediately before EACH native echo mem. Keep the absolute deadline
+# through incidental wakes; a spent/ambiguous expiry starts another interval.
+fa_prepare() {
+	[ "$fa_active" = 1 ] || return 0
+	fa_now=$(fa_read "$fa_rtc/since_epoch") || { fa_disable; return 0; }
+	fa_number "$fa_now" && [ "$fa_now" -gt 0 ] || { fa_disable; return 0; }
+	fa_current=$(fa_read "$fa_rtc/wakealarm") || { fa_disable; return 0; }
+	case "$fa_current" in
+		''|0) ;;
+		*) [ "$fa_owned" = 1 ] && [ "$fa_current" = "$fa_deadline" ] || { fa_disable; return 0; } ;;
+	esac
+	if [ "$fa_deadline" -le "$fa_now" ]; then
+		fa_clear_owned
+		[ "$fa_owned" = 0 ] || { fa_disable; return 0; }
+		fa_deadline=$((fa_now + fa_secs))
+		fa_current=
+	fi
+	case "$fa_current" in
+		''|0)
+			# Persist ownership before arming, so interruption cannot leave an
+			# unrecorded alarm. The launcher only clears an exact matching value.
+			(umask 077; printf '%s %s\n' "${fa_rtc##*/}" "$fa_deadline" > "$fa_marker.tmp.$$") &&
+				mv "$fa_marker.tmp.$$" "$fa_marker" || { rm -f "$fa_marker.tmp.$$"; fa_disable; return 0; }
+			# Rename is atomic, but persistence needs a flush before the hardware
+			# alarm is armed. Pay this cost only when claiming a new deadline.
+			sync || { rm -f "$fa_marker"; fa_disable; return 0; }
+			fa_owned=1
+			printf '%s\n' "$fa_deadline" > "$fa_rtc/wakealarm" 2>/dev/null || { fa_disable; return 0; }
+			[ "$(fa_read "$fa_rtc/wakealarm")" = "$fa_deadline" ] || { fa_disable; return 0; }
+			;;
+	esac
+	fa_capture || { fa_disable; return 0; }
+	fa_before=$fa_sample
+	fa_hall_before=$fa_hall_sample
+	return 0
+}
+
+# Classification only: never requests suspend or poweroff. The caller may map
+# shutdown to the existing launcher-mediated exit42 before post-resume hooks.
+fa_after_suspend() {
+	fa_decision=ordinary
+	[ "$fa_active" = 1 ] && [ "$fa_owned" = 1 ] || return 0
+	[ "$1" = 0 ] || { fa_disable; return 0; }
+	fa_capture || { fa_disable; return 0; }
+	fa_after=$fa_sample
+	fa_now=$(fa_read "$fa_rtc/since_epoch") || { fa_disable; return 0; }
+	fa_number "$fa_now" && [ "$fa_now" -gt 0 ] || { fa_disable; return 0; }
+	fa_current=$(fa_read "$fa_rtc/wakealarm") || { fa_disable; return 0; }
+	[ "$fa_now" -ge "$fa_deadline" ] || return 0
+	# Deadline elapsed alone is not proof. Only this alarm child may advance;
+	# simultaneous hall/button/charger events always win as an ordinary wake.
+	fa_confirmed=0
+	set -- $fa_before $fa_after
+	if [ "$7" -gt "$1" ] && [ "$2 $3 $4 $5 $6" = "$8 $9 ${10} ${11} ${12}" ] &&
+		[ "$fa_hall_before" = "$fa_hall_sample" ]; then
+		case "$fa_current" in ''|0) fa_confirmed=1 ;; esac
+	fi
+	fa_usb=$(fa_read "$fa_supply/usb/online") || fa_usb=unknown
+	fa_ac=$(fa_read "$fa_supply/ac/online") || fa_ac=unknown
+	if [ "$fa_confirmed" = 1 ] && [ "$fa_usb" = 0 ] && [ "$fa_ac" = 0 ]; then
+		fa_clear_owned
+		if [ "$fa_owned" = 0 ]; then
+			fa_decision=shutdown
+		else
+			# A final ownership/readback failure must not produce exit42.
+			fa_active=0
+		fi
+	else
+		fa_decision=defer
+		fa_clear_owned
+		if [ "$fa_owned" = 0 ]; then
+			fa_deadline=0
+		else
+			# Preserve the recorded old deadline if its clear/readback failed;
+			# changing it would lose ownership of the still-pending alarm.
+			fa_active=0
+		fi
+	fi
+	return 0
+}
+# END_MY355_AUTO_OFF_POLICY
+
 LID_PATH=/sys/devices/platform/hall-mh248/hallvalue
 
 
@@ -33,8 +242,16 @@ lid_open() {
 # sleep_max_tries. Sets the global sleep_retval.
 suspend_until_lid_open() {
 	while true; do
+		fa_prepare
 		echo mem > /sys/power/state
 		sleep_retval=$?
+		fa_after_suspend "$sleep_retval"
+		if [ "$fa_decision" = shutdown ]; then
+			log "Auto power off: confirmed RTC alarm after ${fa_secs}s asleep"
+			fa_finish
+			rm -f /tmp/system_suspend
+			exit 42
+		fi
 
 		if [ $sleep_retval -ne 0 ] || lid_open; then
 			break
@@ -106,6 +323,41 @@ after() {
 	log "Resumed from suspend."
 }
 
+fa_resume_started=0
+fa_signal_resume() {
+	fa_finish
+	if [ "$fa_resume_started" = 0 ]; then
+		fa_resume_started=1
+		# after() backgrounds slow services itself. Run its cheap bookkeeping
+		# before returning success so an interruption is an ordinary full wake.
+		after
+	fi
+	exit 0
+}
+
+# Boot cleanup only touches an alarm whose exact RTC/deadline was recorded by
+# this feature. Never clear a different owner's alarm or enter suspend here.
+if [ "${1:-}" = --clear-auto-shutdown-alarm ]; then
+	fa_boot_cleanup
+	exit 0
+fi
+
+fa_config="${SHARED_USERDATA_PATH:-/mnt/SDCARD/.userdata/shared}/minuisettings.txt"
+fa_timeout=0
+if [ -r "$fa_config" ]; then
+	fa_timeout=$(sed -n 's/^autoShutdownTimeout=\([0-9][0-9]*\)$/\1/p' "$fa_config" | head -n 1)
+fi
+fa_init "${fa_timeout:-0}"
+if [ "$fa_active" = 0 ] && fa_number "${fa_timeout:-0}" && [ "$fa_timeout" -gt 0 ]; then
+	log "Auto power off unavailable: RTC, wakeup, alarm ownership or timeout helper; using native sleep"
+fi
+trap 'fa_finish' EXIT
+if [ "$fa_active" = 1 ]; then
+	# Interrupted sleep must not leave a future owned alarm or turn an RTC
+	# diagnostic failure into the caller's generic suspend-failure poweroff.
+	trap 'fa_signal_resume' INT TERM HUP
+fi
+
 before
 
 log "Suspending..."
@@ -145,9 +397,12 @@ for i in $(seq 1 $sleep_max_tries); do
 	sleep 3
 done
 
+fa_finish
+
 log "Resuming..."
 
 # Resume services in background to reduce UI latency
+fa_resume_started=1
 after &
 
 exit $sleep_retval
