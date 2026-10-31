@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #define __DEFINES_H__
 #define MAX_PATH 512
 #define GFX_SCALE_FULLSCREEN 0
@@ -15,10 +16,30 @@
 #define RES_PATH "."
 int clamp(int n, int low, int high) { return n < low ? low : n > high ? high : n; }
 double clampd(double n, double low, double high) { return n < low ? low : n > high ? high : n; }
+static int fail_stream, stream_calls, fail_close, close_calls, fail_put;
+static FILE *test_memstream(char **buf, size_t *len) {
+    if (++stream_calls == fail_stream) { errno = ENOMEM; return NULL; }
+    return open_memstream(buf, len);
+}
+static int test_fclose(FILE *file) {
+    int ret = fclose(file);
+    if (++close_calls == fail_close) { errno = EIO; return EOF; }
+    return ret;
+}
+static int test_fputs(const char *text, FILE *file) {
+    if (fail_put) { fail_put = 0; errno = EIO; return EOF; }
+    return fputs(text, file);
+}
+#define open_memstream test_memstream
+#define fclose test_fclose
+#define fputs test_fputs
 #ifndef CONFIG_SOURCE
 #define CONFIG_SOURCE "../workspace/all/common/config.c"
 #endif
 #include CONFIG_SOURCE
+#undef open_memstream
+#undef fclose
+#undef fputs
 
 static char path[1024];
 static void write_settings(const char *text) {
@@ -68,6 +89,24 @@ int main(int argc, char **argv) {
     assert(!strstr(saved, "wifi=1\n")); assert(!strstr(saved, "wifi=9\n"));
     assert(!strstr(saved, "invalid line")); free(saved);
     puts("ok exact keys replace duplicate known keys and retain neighboring names");
+
+    char long_line[2048];
+    memset(long_line, 'x', sizeof(long_line));
+    memcpy(long_line, "zzLong=", 7); long_line[sizeof(long_line)-2] = '\n'; long_line[sizeof(long_line)-1] = 0;
+    write_settings(long_line); CFG_sync(); saved = read_settings();
+    has_line(saved, long_line); free(saved);
+    puts("ok an unknown line spanning several read buffers survives intact");
+
+    const char *keep = "wifi=1\nzzMustSurvive=123\n";
+    for (int failure = 1; failure <= 6; ++failure) {
+        write_settings(keep); stream_calls = close_calls = 0;
+        fail_stream = failure <= 2 ? failure : 0;
+        fail_close = failure >= 3 && failure <= 5 ? failure - 2 : 0;
+        fail_put = failure == 6;
+        CFG_sync(); equal_file(keep);
+        fail_stream = fail_close = fail_put = 0;
+    }
+    puts("ok allocation, buffering and stream-close failures preserve the previous file");
 
     assert(unlink(path) == 0); CFG_init(NULL, NULL); assert(access(path, F_OK) != 0);
     CFG_setWifi(true); saved = read_settings(); has_line(saved, "wifi=1\n"); free(saved);
