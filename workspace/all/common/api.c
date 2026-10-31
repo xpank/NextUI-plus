@@ -4252,7 +4252,7 @@ void PWR_update(int *_dirty, int *_show_setting, PWR_callback_t before_sleep, PW
 #ifdef PLATFORM_MY355
 			|| !lid.is_open
 #endif
-		))) // manual sleep
+		)) // manual sleep
 	)
 	{
 		pwr.requested_sleep = 0;
