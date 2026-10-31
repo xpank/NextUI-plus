@@ -574,6 +574,13 @@ int PWR_isPoweringOff(void);
 
 void PWR_sleep(void);
 int PWR_deepSleep(void);
+// PWR_deepSleep() return values. Anything non-zero means the caller should
+// power the device off; the distinct code only exists so the log is honest.
+#define PWR_DEEPSLEEP_FAILED (-1)
+#define PWR_DEEPSLEEP_AUTO_SHUTDOWN (-2)
+// Exit status the platform suspend script uses to ask for a clean power off
+// after it has been asleep for the configured period.
+#define SUSPEND_EXIT_AUTO_SHUTDOWN 42
 
 void PWR_requestSleep(void);
 void PWR_disableSleep(void);

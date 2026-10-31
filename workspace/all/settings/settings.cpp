@@ -135,6 +135,21 @@ static const std::vector<std::string> screen_timeout_labels = {"Never", "5s", "1
 static const std::vector<std::any>    sleep_timeout_secs = {5U, 10U, 15U, 30U, 45U, 60U, 90U, 120U, 240U, 360U, 600U};
 static const std::vector<std::string> sleep_timeout_labels = {"5s", "10s", "15s", "30s", "45s", "60s", "90s", "2m", "4m", "6m", "10m"};
 
+#if defined(HAS_SLEEP_AUTO_POWER_OFF) && HAS_SLEEP_AUTO_POWER_OFF
+// How long the device may stay asleep before it powers itself off. Read by
+// .system/h700/bin/suspend, which arms an RTC alarm for it; 0 disables the
+// whole mechanism and is the default.
+//
+// Measured directly: alarms of 30s, 45s, 60s, 90s and 900s all fired. So 5m
+// and 10m sit inside the best-evidenced part of the range and 15m is its top
+// end; 30m upwards is extrapolation from a comparator that was never checked
+// for width. That is the right way round for risk, because the failure mode of
+// an alarm that does not fire is the device staying asleep -- what it did
+// before this feature existed.
+static const std::vector<std::any>    auto_shutdown_secs = {0U, 300U, 600U, 900U, 1800U, 3600U, 7200U, 14400U, 28800U};
+static const std::vector<std::string> auto_shutdown_labels = {"Never", "5m", "10m", "15m", "30m", "1h", "2h", "4h", "8h"};
+#endif
+
 static const std::vector<std::string> on_off = {"Off", "On"};
 
 static const std::vector<std::string> scaling_strings = {"Fullscreen", "Fit", "Fill"};
@@ -653,6 +668,12 @@ int main(int argc, char *argv[])
             { return CFG_getSuspendTimeoutSecs(); }, [](const std::any &value)
             { CFG_setSuspendTimeoutSecs(std::any_cast<uint32_t>(value)); },
             []() { CFG_setSuspendTimeoutSecs(CFG_DEFAULT_SUSPENDTIMEOUTSECS);}},
+#if defined(HAS_SLEEP_AUTO_POWER_OFF) && HAS_SLEEP_AUTO_POWER_OFF
+            new MenuItem{ListItemType::Generic, "Auto power off", "Power off after this long asleep, counted from when the\nsuspend timeout ends. Never happens while charging.", auto_shutdown_secs, auto_shutdown_labels, []() -> std::any
+            { return CFG_getAutoShutdownTimeoutSecs(); }, [](const std::any &value)
+            { CFG_setAutoShutdownTimeoutSecs(std::any_cast<uint32_t>(value)); },
+            []() { CFG_setAutoShutdownTimeoutSecs(CFG_DEFAULT_AUTOSHUTDOWNTIMEOUTSECS);}},
+#endif
             new MenuItem{ListItemType::Generic, "Haptic feedback", "Enable or disable haptic feedback on certain actions in the OS", {false, true}, on_off, []() -> std::any
             { return CFG_getHaptics(); }, [](const std::any &value)
             { CFG_setHaptics(std::any_cast<bool>(value)); },

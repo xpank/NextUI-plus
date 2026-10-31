@@ -81,6 +81,147 @@ after_async() {
 	( "$SYSTEM_PATH/bin/run_hooks.sh" post-resume.d ) >/dev/null 2>&1
 }
 
+# ---------------------------------------------------------------------------
+# Auto shutdown from sleep
+#
+# Power the device off once it has been asleep for a configured period, so a
+# clamshell left shut does not sit suspended until the battery is flat.
+#
+# The decision has to be made HERE, inside the suspend loop, and not in a
+# post-resume hook or in nextui.elf: the loop below re-suspends on every wake
+# while the lid is shut, so with the lid shut the caller is never reached and
+# no post-resume hook ever runs.  Measured: three alarm wakes produced three
+# re-suspends and a single post-resume run, at the very end.
+#
+# Powering off is done by exiting non-zero.  PWR_deepSleep() maps any non-zero
+# exit of this script to -1 and PWR_waitForWake() answers -1 with
+# PWR_powerOff(0) -- NextUI's ordinary clean shutdown (autosave, /tmp/poweroff,
+# baseos_flush_state; poweroff_next).  A distinct code is used so the log can
+# tell an auto shutdown apart from a genuine suspend failure, which exits
+# non-zero too and is also answered with a power off.
+#
+# Everything below is inert while the timeout is zero ("Never", the default):
+# every function returns before it touches a device node, no alarm is armed and
+# nothing is logged, so the script behaves exactly as it did before.
+# ---------------------------------------------------------------------------
+as_rtc=/sys/class/rtc/rtc1
+as_bat=/sys/class/power_supply/axp2202-battery
+as_exit_code=42			# 42 << 8 == 10752, as logged by nextui.elf
+
+as_secs=0			# 0 == never
+as_deadline=0			# absolute, in rtc1 seconds
+as_armed=
+as_rtc_irq0=0
+as_pek0=0
+as_hall0=1
+as_logfile="${LOGS_PATH:-${USERDATA_PATH:-/mnt/SDCARD/.userdata/h700}/logs}/autoshutdown.txt"
+
+# Seconds to stay asleep before powering off.  The Settings item writes
+# autoShutdownTimeout= into minuisettings.txt (CFG_sync rewrites that file on
+# every setter, so no IPC is needed); the plain file is the fallback that was
+# used before the Settings item existed and is ignored once the key is present.
+as_read_timeout() {
+	as_cfg="${SHARED_USERDATA_PATH:-/mnt/SDCARD/.userdata/shared}/minuisettings.txt"
+	as_v=
+	[ -r "$as_cfg" ] && as_v=$(sed -n 's/^autoShutdownTimeout=\([0-9][0-9]*\).*/\1/p' "$as_cfg" | head -n 1)
+	if [ -z "$as_v" ]; then
+		as_file="${USERDATA_PATH:-/mnt/SDCARD/.userdata/h700}/autoshutdown"
+		[ -r "$as_file" ] && as_v=$(sed -n 's/^\([0-9][0-9]*\).*/\1/p' "$as_file" | head -n 1)
+	fi
+	case "${as_v:-}" in ''|*[!0-9]*) as_v=0 ;; esac
+	as_secs=$as_v
+	return 0
+}
+
+# rtc1 is the in-SoC RTC and the only one armed as a wakeup source.  Its
+# since_epoch is a free-running counter: immune to clock changes, and unlike
+# the system clock it does not lose ~1.5% across a suspend.
+as_now() { cat "$as_rtc/since_epoch" 2>/dev/null || echo 0; }
+
+# Match the interrupts by name, not by number: the numbers are allocated from
+# the device tree and are not stable across kernels.
+as_rtc_irqs() { awk '$NF=="rtc" {n=$2+$3+$4+$5} END {print n+0}' /proc/interrupts; }
+as_pek_irqs() { awk '/axp20x-pek-db/ {s+=$2+$3+$4+$5} END {print s+0}' /proc/interrupts; }
+
+as_hall() { cat "$as_bat/hallkey" 2>/dev/null || echo 1; }
+as_charging() { [ "$(cat "$as_bat/status" 2>/dev/null)" = "Charging" ]; }
+
+as_log() {
+	[ "$as_secs" -gt 0 ] || return 0
+	mkdir -p "${as_logfile%/*}" 2>/dev/null || true
+	if [ -f "$as_logfile" ]; then
+		as_sz=$(wc -c < "$as_logfile" 2>/dev/null || echo 0)
+		[ "${as_sz:-0}" -gt 65536 ] && mv "$as_logfile" "$as_logfile.1"
+	fi
+	echo "$(date '+%Y-%m-%d %H:%M:%S') rtc=$(as_now) $*" >> "$as_logfile" 2>/dev/null
+	sync				# the card is vfat
+	return 0
+}
+
+as_disarm() {
+	[ "$as_secs" -gt 0 ] || return 0
+	[ -w "$as_rtc/wakealarm" ] && echo 0 > "$as_rtc/wakealarm" 2>/dev/null
+	as_armed=
+	return 0
+}
+
+# Arm the alarm and snapshot the four wake discriminators.  Called immediately
+# before every `echo mem`, which is the latest possible moment: the power press
+# that asked for the sleep is itself a pek edge, so an early snapshot would make
+# every button-initiated sleep look like a user wake.
+#
+# The deadline is absolute and is only recomputed when it has passed, so the
+# elapsed time accumulates across the re-suspends the lid loop performs instead
+# of the countdown restarting on every iteration.
+as_arm() {
+	as_armed=
+	[ "$as_secs" -gt 0 ] || return 0
+	[ -w "$as_rtc/wakealarm" ] || return 0
+	# Refuse a zero, an empty read or anything non-numeric. as_now falls back
+	# to 0 if the counter cannot be read, and 0 would put the deadline in the
+	# distant past -- the alarm would then fire the instant it was armed and the
+	# device would power itself off on the next sleep, out of a read error.
+	as_t=$(as_now)
+	case "$as_t" in ''|0|*[!0-9]*) return 0 ;; esac
+	if [ $(( as_deadline - as_t )) -lt 5 ]; then
+		as_deadline=$(( as_t + as_secs ))
+	fi
+	echo 0 > "$as_rtc/wakealarm" 2>/dev/null
+	echo "$as_deadline" > "$as_rtc/wakealarm" 2>/dev/null
+	[ -n "$(cat "$as_rtc/wakealarm" 2>/dev/null)" ] || return 0
+	as_armed=1
+	as_rtc_irq0=$(as_rtc_irqs)
+	as_pek0=$(as_pek_irqs)
+	as_hall0=$(as_hall)
+	return 0
+}
+
+# Did our own alarm cause this wake?  The alarm is consumed when it fires, so
+# wakealarm reads back empty, and the rtc interrupt count moves.  Both are
+# required: empty also means "never armed".  /sys/power/pm_wakeup_irq is not
+# usable for this -- it names the PMIC aggregator on every wake, alarm or not.
+as_fired() {
+	[ "$as_secs" -gt 0 ] || return 1
+	[ -n "$as_armed" ] || return 1
+	[ -z "$(cat "$as_rtc/wakealarm" 2>/dev/null)" ] || return 1
+	[ "$(as_rtc_irqs)" -gt "$as_rtc_irq0" ]
+}
+
+# ...and was the owner doing something in the same resume?  A power press moves
+# the pek edge counters; opening the lid moves none of them, which is why the
+# hall state is snapshotted separately.
+as_user_woke() {
+	[ "$(as_pek_irqs)" -ne "$as_pek0" ] && return 0
+	[ "$as_hall0" = "0" ] && [ "$(as_hall)" = "1" ] && return 0
+	return 1
+}
+
+as_read_timeout
+if [ "$as_secs" -gt 0 ]; then
+	as_disarm			# drop anything a previous session left pending
+	as_log "sleep: auto shutdown after ${as_secs}s, lid=$(as_hall) charging=$(cat "$as_bat/status" 2>/dev/null)"
+fi
+
 before
 
 hallkey=/sys/class/power_supply/axp2202-battery/hallkey
@@ -100,6 +241,10 @@ while :; do
 		# Non-SP kernels do not expose this attribute and already use the
 		# full USB-controller suspend path.
 		[ -w "$os_sleep" ] && printf '16' > "$os_sleep"
+
+		# Arm the auto-shutdown alarm and snapshot the wake
+		# discriminators.  No-op unless the timeout is set.
+		as_arm
 
 		# Now issue suspend-to-ram command.
 		echo mem >/sys/power/state
@@ -131,6 +276,31 @@ while :; do
 		sleep 3
 	done
 
+	# Auto shutdown.  This has to come before the lid test below, which
+	# re-suspends without ever handing control back to the caller.
+	if [ "$as_secs" -gt 0 ] && [ $sleep_retval -eq 0 ] && as_fired; then
+		as_armed=
+		if as_user_woke; then
+			as_log "wake: alarm fired but the owner is here (pek $as_pek0->$(as_pek_irqs), lid $as_hall0->$(as_hall)); cancelling"
+			# Fall through to the normal lid/return logic.  A re-suspend
+			# re-arms with the deadline pushed forward, so a pocketed
+			# press cannot leave the device asleep with no alarm.
+		elif as_charging; then
+			as_log "wake: alarm fired while charging; re-suspending for another ${as_secs}s"
+			sleep 1
+			continue
+		else
+			as_log "wake: alarm fired after ${as_secs}s asleep (lid=$(as_hall), battery=$(cat "$as_bat/capacity" 2>/dev/null)%); powering off"
+			as_disarm
+			# Non-zero exit -> PWR_deepSleep() returns -1 ->
+			# PWR_waitForWake() calls PWR_powerOff(0).  after_sync and
+			# after_async are deliberately skipped: syncsettings.elf
+			# would light the backlight, and restarting the radios and
+			# running post-resume hooks into a shutdown is pointless.
+			exit $as_exit_code
+		fi
+	fi
+
 	# Clamshells: a pocketed power press wakes the kernel even with the
 	# lid shut. Only hand control back to the caller (which turns the
 	# screen on) once the lid is actually open; otherwise re-suspend.
@@ -143,6 +313,9 @@ while :; do
 	fi
 	break
 done
+
+as_disarm				# never leave an alarm pending
+[ "$as_secs" -gt 0 ] && as_log "wake: returning to the caller (retval=$sleep_retval, lid=$(as_hall))"
 
 after_sync
 after_async &

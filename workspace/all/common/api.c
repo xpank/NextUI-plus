@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <sys/wait.h>
 
 #include "utils.h"
 #include "config.h"
@@ -4434,10 +4435,18 @@ static void PWR_waitForWake(void)
 					{
 						return;
 					}
+					else if (ret == PWR_DEEPSLEEP_AUTO_SHUTDOWN)
+					{
+						LOG_info("auto shutdown: asleep past the configured timeout - powering off\n");
+					}
 					else
 					{
 						LOG_warn("failed to enter deep sleep - powering off\n");
 					}
+					// NOTE: if pwr.can_poweroff were ever 0 this falls through with
+					// sleep_ticks unchanged and deep-sleeps again on the next pass.
+					// Nothing calls PWR_disablePowerOff() today; if something starts
+					// to, auto shutdown becomes a suspend loop.
 				}
 				if (pwr.can_poweroff)
 				{
@@ -4487,7 +4496,14 @@ int PWR_deepSleep(void)
 		}
 
 		LOG_info("suspend executable exited with %d\n", ret);
-		return ret == 0 ? 0 : -1;
+		if (ret == 0)
+			return 0;
+		// The script asks for a clean power off with a distinct exit status once
+		// it has been asleep for the configured period. Any other non-zero exit
+		// is a genuine suspend failure, which is also answered with a power off.
+		if (WIFEXITED(ret) && WEXITSTATUS(ret) == SUSPEND_EXIT_AUTO_SHUTDOWN)
+			return PWR_DEEPSLEEP_AUTO_SHUTDOWN;
+		return PWR_DEEPSLEEP_FAILED;
 	}
 
 	return PLAT_deepSleep();
