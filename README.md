@@ -1,6 +1,21 @@
 # NextUI-plus
 
-Unofficial NextUI fork, tested on RGSP. Adds optional video/audio previews, sleep auto-off, settings fixes, and BaseOS shutdown support.
+Unofficial NextUI fork for H700 devices, tested on RGSP. Adds optional video/audio previews, sleep auto-off, settings fixes, and BaseOS shutdown support.
+
+https://github.com/user-attachments/assets/5f8d0c4a-7255-468e-99ba-f572b4242d95
+
+Video preview for ROMs. Files placed in .videos directory (e.g. ROMS/GBA/.videos)
+
+<table>
+  <tr>
+    <td><img src="github/demo/preview-settings.png" alt="Video and audio preview settings" width="400"></td>
+    <td><img src="github/demo/shutdown-settings.png" alt="Auto power off set to 10 minutes" width="400"></td>
+  </tr>
+  <tr>
+    <td>Toggle video previews and preview audio.</td>
+    <td>Automatically power off after a chosen time asleep.</td>
+  </tr>
+</table>
 
 Downloads: [fork releases](https://github.com/xpank/NextUI-plus/releases).
 
