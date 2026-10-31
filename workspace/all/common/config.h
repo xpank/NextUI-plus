@@ -136,6 +136,8 @@ typedef struct
 	bool showTools;
 	bool showCollections;
 	bool showGameArt;
+	bool showGameVideo;
+	bool showGameVideoAudio;
 	bool showFolderNamesAtRoot;
 	bool romsUseFolderBackground;
 	bool showQuickSwitcherUi;
@@ -228,6 +230,8 @@ typedef struct
 #define CFG_DEFAULT_SHOWRECENTS true
 #define CFG_DEFAULT_SHOWCOLLECTIONS true
 #define CFG_DEFAULT_SHOWGAMEART true
+#define CFG_DEFAULT_SHOWGAMEVIDEO true
+#define CFG_DEFAULT_SHOWGAMEVIDEOAUDIO true
 #define CFG_DEFAULT_SHOWFOLDERNAMESATROOT true
 #define CFG_DEFAULT_GAMESWITCHERSCALING GFX_SCALE_FULLSCREEN
 #define CFG_DEFAULT_SCREENTIMEOUTSECS 60
@@ -375,6 +379,15 @@ void CFG_setShowCollections(bool show);
 // Show/hide game art in the main menu.
 bool CFG_getShowGameArt(void);
 void CFG_setShowGameArt(bool show);
+// Video previews in the game-art panel. Default on; turning it off stops the
+// decoder being asked for anything, so ffmpeg is never dlopened.
+bool CFG_getShowGameVideo(void);
+void CFG_setShowGameVideo(bool show);
+// Sound for those previews. Default on. Independent of the system volume,
+// which is applied below SDL at the ALSA mixer and therefore needs no help
+// here: this only decides whether an audio device is opened at all.
+bool CFG_getShowGameVideoAudio(void);
+void CFG_setShowGameVideoAudio(bool show);
 // Use folder background or default background for roms
 bool CFG_getRomsUseFolderBackground(void);
 void CFG_setRomsUseFolderBackground(bool);

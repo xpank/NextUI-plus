@@ -20,8 +20,18 @@ SDL?=SDL
 ###########################################################
 
 TARGET = nextui
+# The ffmpeg headers are used at compile time and the libraries are NEVER
+# linked: video/vidload.c dlopen()s them by soname at first use. Adding
+# -lavcodec (or anything else libav*) to LDFLAGS below would put an entry in
+# nextui.elf's DT_NEEDED and cost boot time on every single boot, including
+# the boots that never show a preview. workspace/h700/check-video-preview.sh
+# fails if that ever happens, and reads both this line and the built ELF.
 INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 SOURCE = $(TARGET).c ../common/scaler.c ../common/utils.c ../common/config.c ../common/api.c ../../$(PLATFORM)/platform/platform.c
+ifeq ($(PLATFORM),h700)
+INCDIR += -I../../$(PLATFORM)/ffmpeg/output/include
+SOURCE += ../common/video/vidload.c ../common/video/vidplayer.c ../common/video/vidaudio.c
+endif
 
 CC = $(CROSS_COMPILE)gcc
 CFLAGS  += $(OPT)

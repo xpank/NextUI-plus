@@ -63,6 +63,8 @@ void CFG_defaults(NextUISettings *cfg)
         .showTools = CFG_DEFAULT_SHOWTOOLS,
         .showCollections = CFG_DEFAULT_SHOWCOLLECTIONS,
         .showGameArt = CFG_DEFAULT_SHOWGAMEART,
+        .showGameVideo = CFG_DEFAULT_SHOWGAMEVIDEO,
+        .showGameVideoAudio = CFG_DEFAULT_SHOWGAMEVIDEOAUDIO,
         .gameSwitcherScaling = CFG_DEFAULT_GAMESWITCHERSCALING,
         .defaultView = CFG_DEFAULT_VIEW,
         .showQuickSwitcherUi = CFG_DEFAULT_SHOWQUICKWITCHERUI,
@@ -294,6 +296,16 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
             if (sscanf(line, "gameart=%i", &temp_value) == 1)
             {
                 CFG_setShowGameArt((bool)temp_value);
+                continue;
+            }
+            if (sscanf(line, "gamevideo=%i", &temp_value) == 1)
+            {
+                CFG_setShowGameVideo((bool)temp_value);
+                continue;
+            }
+            if (sscanf(line, "gamevideoaudio=%i", &temp_value) == 1)
+            {
+                CFG_setShowGameVideoAudio((bool)temp_value);
                 continue;
             }
             if (sscanf(line, "screentimeout=%i", &temp_value) == 1)
@@ -887,6 +899,28 @@ void CFG_setShowGameArt(bool show)
     CFG_sync();
 }
 
+bool CFG_getShowGameVideo(void)
+{
+    return settings.showGameVideo;
+}
+
+void CFG_setShowGameVideo(bool show)
+{
+    settings.showGameVideo = show;
+    CFG_sync();
+}
+
+bool CFG_getShowGameVideoAudio(void)
+{
+    return settings.showGameVideoAudio;
+}
+
+void CFG_setShowGameVideoAudio(bool show)
+{
+    settings.showGameVideoAudio = show;
+    CFG_sync();
+}
+
 bool CFG_getRomsUseFolderBackground(void)
 {
     return settings.romsUseFolderBackground;
@@ -1442,6 +1476,14 @@ void CFG_get(const char *key, char *value)
     {
         sprintf(value, "%i", CFG_getShowGameArt());
     }
+    else if (strcmp(key, "gamevideo") == 0)
+    {
+        sprintf(value, "%i", CFG_getShowGameVideo());
+    }
+    else if (strcmp(key, "gamevideoaudio") == 0)
+    {
+        sprintf(value, "%i", CFG_getShowGameVideoAudio());
+    }
 	else if (strcmp(key, "showfoldernamesatroot") == 0)
     {
         sprintf(value, "%i", CFG_getShowFolderNamesAtRoot());
@@ -1724,6 +1766,8 @@ void CFG_sync(void)
     fprintf(file, "tools=%i\n", settings.showTools);
 	fprintf(file, "collections=%i\n", settings.showCollections);
     fprintf(file, "gameart=%i\n", settings.showGameArt);
+    fprintf(file, "gamevideo=%i\n", settings.showGameVideo);
+    fprintf(file, "gamevideoaudio=%i\n", settings.showGameVideoAudio);
     fprintf(file, "showfoldernamesatroot=%i\n", settings.showFolderNamesAtRoot);
     fprintf(file, "screentimeout=%i\n", settings.screenTimeoutSecs);
     fprintf(file, "suspendTimeout=%i\n", settings.suspendTimeoutSecs);
@@ -1854,6 +1898,8 @@ void CFG_print(void)
     printf("\t\"tools\": %i,\n", settings.showTools);
 	printf("\t\"collections\": %i,\n", settings.showCollections);
     printf("\t\"gameart\": %i,\n", settings.showGameArt);
+    printf("\t\"gamevideo\": %i,\n", settings.showGameVideo);
+    printf("\t\"gamevideoaudio\": %i,\n", settings.showGameVideoAudio);
     printf("\t\"showfoldernamesatroot\": %i,\n", settings.showFolderNamesAtRoot);
     printf("\t\"screentimeout\": %i,\n", settings.screenTimeoutSecs);
     printf("\t\"suspendTimeout\": %i,\n", settings.suspendTimeoutSecs);

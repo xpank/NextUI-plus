@@ -5,6 +5,7 @@
 #include "scaler.h"
 #include "config.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 ///////////////////////////////
 
@@ -683,6 +684,43 @@ void PLAT_setOffsetX(int x);
 void PLAT_setOffsetY(int y);
 void PLAT_drawOnLayer(SDL_Surface *inputSurface, int x, int y, int w, int h, float brightness, bool maintainAspectRatio,int layer);
 void PLAT_clearLayers(int layer);
+
+// --- video previews in the game-art panel --------------------------------
+//
+// How a decoded frame's three planes are meant to be interpreted. Y'CbCr is
+// not one encoding: the same bytes mean different colours depending on whether
+// the range is limited (16-235) or full (0-255) and on which matrix the encoder
+// used. Guessing wrong does not corrupt the picture, it tints it -- which is
+// why it is easy to ship and easy to misread as a decoder bug. Taken from the
+// clip's own metadata; never assumed.
+//
+// These values are mirrored by RG_YUV_* in video/yuv2rgb.h, and
+// generic_video.c asserts the two agree.
+#define PLAT_YUV_BT601 0
+#define PLAT_YUV_BT709 1
+#define PLAT_YUV_FULL  2
+
+// Draw one decoded YUV420 frame into a layer, converting to ARGB8888 on the
+// CPU on the way.
+//
+// This exists rather than reusing PLAT_drawOnLayer because that function
+// creates and destroys an SDL_Texture on every call. At thumbnail-change rate
+// that is fine; at 30 fps it is an allocate/free pair per frame in the GPU
+// driver. This keeps one streaming texture alive for the duration of a clip and
+// recreates it only when `generation` changes.
+//
+// `radius` rounds the corners to match the static cover art it replaces, in
+// SOURCE pixels -- the caller scales it the same way onThumbLoaded() does, so
+// the on-screen radius is identical and the swap is invisible.
+void PLAT_drawVideoFrameOnLayer(const uint8_t *y, const uint8_t *u, const uint8_t *v,
+	int ystride, int ustride, int vstride,
+	int width, int height, int yuv_mode, unsigned generation,
+	int x, int target_y, int w, int h, int radius, int layer);
+
+// Destroy the clip's streaming texture. Called when a preview stops, so a
+// device that browsed one folder with previews does not hold the texture for
+// the rest of the session.
+void PLAT_freeVideoLayer(void);
 SDL_Surface* PLAT_captureRendererToSurface();
 
 // Notification overlay for GL rendering (rendered on top of game during PLAT_GL_Swap)

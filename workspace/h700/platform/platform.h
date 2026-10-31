@@ -184,6 +184,7 @@ extern int needs_portrait_sdl; // DEVICE=rg28xx: SDL rotates onto the portrait p
 // Stock H700 audio must be closed before suspend to avoid a long stall on wake.
 #define SND_CLOSE_ON_SLEEP 1
 #define HAS_SLEEP_AUTO_POWER_OFF 1
+#define HAS_VIDEO_PREVIEWS 1
 
 #define SCREEN_FPS (hdmi_active ? 60.0 : panel_fps)
 // ceiling, not the count: only rg40xxh/v and rgcubexx have RGB LEDs, and

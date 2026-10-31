@@ -11,6 +11,9 @@
 #include "api.h"
 #include "utils.h"
 #include "config.h"
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+#include "video/vidplayer.h"
+#endif
 #include <sys/resource.h>
 #include <pthread.h>
 #include <assert.h>
@@ -2032,6 +2035,182 @@ void onThumbLoaded(SDL_Surface* surface) {
 	SDL_UnlockMutex(thumbMutex);
 }
 
+// --- video previews in the game-art panel --------------------------------
+//
+// A clip plays in place of the static image when the owner rests on a ROM for
+// two seconds. See VIDEO-PREVIEW-PORT.md. The decode lives in
+// common/video/ and the drawing in the platform layer; everything here is
+// policy: when to start, when to stop, and where to put the picture.
+//
+// The rectangle below is deliberately the same arithmetic as the thumbnail
+// draw further down, and the corner radius the same as onThumbLoaded() above.
+// Recomputing either differently -- even by a pixel -- would make the panel
+// visibly jump at the moment the video replaces the image.
+//
+// Nothing here is reached before the first frame: the decoder's worker thread
+// is created by the first VIDP_request(), and the dlopen of libavcodec happens
+// on that thread. A session that never rests on a ROM with a preview never
+// maps ffmpeg at all.
+
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+#define VIDEO_PREVIEW_REST_MS 2000
+
+static char video_preview_path[1024] = "";
+static uint32_t video_preview_rest_ms = 0;
+static int video_preview_armed = 0;   // a real file is waiting out the timer
+static int video_preview_playing = 0; // the decoder has been asked for it
+static int video_preview_drawn = 0;   // a frame is on LAYER_THUMBNAIL
+
+// True while a clip owns the thumbnail layer, so the static-art draw leaves it
+// alone instead of blitting the image back over the video for one frame.
+static int videoPreviewShowing(void) { return video_preview_drawn; }
+
+static void videoPreviewStop(void) {
+	if (video_preview_playing) {
+		VIDP_stop();
+		PLAT_freeVideoLayer();
+		if (video_preview_drawn) {
+			GFX_clearLayers(LAYER_THUMBNAIL);
+			// The static image is redrawn only when thumbchanged is set, so
+			// ask for it explicitly rather than leaving an empty panel.
+			SDL_LockMutex(thumbMutex);
+			thumbchanged = 1;
+			SDL_UnlockMutex(thumbMutex);
+			setNeedDraw(1);
+		}
+	}
+	video_preview_playing = 0;
+	video_preview_drawn = 0;
+	video_preview_armed = 0;
+	// Forget which clip this was. videoPreviewArm() treats an unchanged path as
+	// "nothing happened" so that incidental redraws do not restart a playing
+	// clip -- but that also means a stopped clip would never be re-armed for
+	// the same entry. Launching a game and coming back to it would silently
+	// leave the preview dead until the selection moved elsewhere and back.
+	video_preview_path[0] = '\0';
+}
+
+// Called wherever the game list is redrawn, which includes every selection
+// change. The rest timer restarts here, so holding a direction through forty
+// ROMs starts no decodes at all -- the timer never reaches two seconds.
+static void videoPreviewArm(const char* rompath, const char* name) {
+	if (!CFG_getShowGameVideo()) {
+		videoPreviewStop();
+		return;
+	}
+
+	char path[1024];
+	// Mirrors the .media/<name>.png convention exactly, so a scraper that can
+	// fill one directory can fill the other.
+	snprintf(path, sizeof(path), "%s/.videos/%s.mp4", rompath, name);
+
+	// The same entry redrawn -- a button-hint change, a background load -- must
+	// not restart a clip that is already playing, nor restart the timer.
+	if (strcmp(path, video_preview_path) == 0) return;
+
+	videoPreviewStop();
+	snprintf(video_preview_path, sizeof(video_preview_path), "%s", path);
+	// Arm only when there is something to play. Without this check, resting on
+	// any ROM at all would reach VIDP_request and dlopen libavcodec for a file
+	// that does not exist -- most ROMs have no preview. This is the second of
+	// the three mechanisms in VIDEO-PREVIEW-PORT.md section 4.
+	video_preview_armed = exists(video_preview_path);
+	video_preview_rest_ms = SDL_GetTicks();
+}
+
+// Returns 1 when a new video frame was drawn and the compositor needs to flip.
+static int videoPreviewTick(int currentScreen) {
+	if (currentScreen != SCREEN_GAMELIST) {
+		// Launching a game, the Quick Menu, the game switcher, sleep: anything
+		// that is not the list stops the clip and frees its texture.
+		videoPreviewStop();
+		return 0;
+	}
+
+	if (video_preview_armed && !video_preview_playing &&
+		SDL_GetTicks() - video_preview_rest_ms >= VIDEO_PREVIEW_REST_MS) {
+		video_preview_armed = 0;
+		video_preview_playing = 1;
+		VIDP_request(video_preview_path);
+	}
+	if (!video_preview_playing) return 0;
+
+	VIDP_Frame frame;
+	if (!VIDP_lockFrame(&frame)) return 0;
+	if (frame.width <= 0 || frame.height <= 0) {
+		VIDP_unlockFrame();
+		return 0;
+	}
+
+	// Identical to the thumbnail draw below, and derived from screen->w/h so
+	// that HDMI -- which runs the whole app at 1280x720 instead of 720x480 --
+	// is handled without a special case.
+	int max_w = (int)(screen->w * CFG_getGameArtWidth());
+	int max_h = (int)(screen->h * 0.6);
+	double aspect_ratio = (double)frame.height / frame.width;
+	int new_w = max_w;
+	int new_h = (int)(new_w * aspect_ratio);
+
+	if (new_h > max_h) {
+		new_h = max_h;
+		new_w = (int)(new_h / aspect_ratio);
+	}
+	if (new_w <= 0 || new_h <= 0) {
+		VIDP_unlockFrame();
+		return 0;
+	}
+
+	int target_x = screen->w-(new_w + SCALE1(BUTTON_MARGIN*3));
+	int target_y = (int)(screen->h * 0.50);
+	int center_y = target_y - (new_h / 2);
+
+	// The same expression onThumbLoaded() uses on the cover image: the radius is
+	// scaled up into source pixels so that after the frame is scaled down to
+	// new_w it lands on screen at exactly SCALE1(CFG_getThumbnailRadius()).
+	// Square corners here would make the swap from static art obvious.
+	int radius = (int)SCALE1((float)CFG_getThumbnailRadius() *
+		((float)frame.width / (float)new_w));
+
+	// The clip says how its planes should be read; translate that into the
+	// platform's own vocabulary rather than letting either end assume.
+	int yuv_mode = frame.yuv == VIDP_YUV_FULL ? PLAT_YUV_FULL
+		: frame.yuv == VIDP_YUV_BT709 ? PLAT_YUV_BT709
+		: PLAT_YUV_BT601;
+
+	GFX_clearLayers(LAYER_THUMBNAIL);
+	PLAT_drawVideoFrameOnLayer(frame.y, frame.u, frame.v,
+		frame.ystride, frame.ustride, frame.vstride,
+		frame.width, frame.height, yuv_mode, frame.generation,
+		target_x, center_y, new_w, new_h, radius, LAYER_THUMBNAIL);
+	// Held only for the upload, which is what the decoder blocks on.
+	VIDP_unlockFrame();
+
+	video_preview_drawn = 1;
+	return 1;
+}
+
+// Called by PWR_update on the way into sleep and on the way into power-off,
+// before either happens.
+//
+// Everywhere else a preview stops asynchronously, which is right: the worker
+// takes a few tens of milliseconds to let go and the app carries on drawing
+// meanwhile. Sleep is the exception. PWR_enterSleep() closes NextUI's own audio
+// device first, because -- in its own words -- a PCM left open across
+// suspend-to-RAM comes back in a state SDL takes about ten seconds to close,
+// freezing the UI on wake. A preview's device is a second PCM that the same
+// call knows nothing about, so it has to be closed here, and closed before the
+// machine suspends rather than shortly afterwards.
+static void videoPreviewBeforeSleep(void) {
+	videoPreviewStop();
+	VIDP_stopAndWait();
+}
+#else
+static int videoPreviewShowing(void) { return 0; }
+static void videoPreviewArm(const char *rompath, const char *name) { (void)rompath; (void)name; }
+static int videoPreviewTick(int currentScreen) { (void)currentScreen; return 0; }
+static void videoPreviewBeforeSleep(void) {}
+#endif
+
 SDL_Rect pillRect;
 int pilltargetY =0;
 int pilltargetTextY =0;
@@ -2333,7 +2512,7 @@ int main (int argc, char *argv[]) {
 		int selected = top->selected;
 		int total = top->entries->count;
 
-		PWR_update(&dirty, &show_setting, NULL, NULL);
+		PWR_update(&dirty, &show_setting, videoPreviewBeforeSleep, NULL);
 
 		// user-assignable buttons, handled before the per-screen input so they work
 		// from the game list, the game switcher and the quick menu alike.
@@ -2636,6 +2815,22 @@ int main (int argc, char *argv[]) {
 				if (total>0) readyResume(top->entries->items[top->selected]);
 			}
 		}
+
+		// Video previews.
+		//
+		// Before the branch chain, not inside one of its arms. The chain has
+		// three: the full redraw, a 30fps arm for scrolling text and late
+		// thumbnail loads, and an idle arm. A clip produces frames with no
+		// input at all, so it belongs to none of them in particular and has to
+		// run whichever is taken.
+		//
+		// On the reference device this was originally in the idle arm, which
+		// looked right and was not: is_scrolling stays set for as long as an
+		// entry's name is too wide to fit, so every long-named game sat
+		// permanently in the middle arm and its preview never started. Short
+		// names fell through to the idle arm and played, which made it look
+		// like a problem with particular files.
+		if (videoPreviewTick(currentScreen)) setNeedDraw(1);
 
 		if(dirty) {
 			SDL_Surface *tmpOldScreen = NULL;
@@ -3034,6 +3229,7 @@ int main (int argc, char *argv[]) {
 						snprintf(thumbpath, sizeof(thumbpath), "%s/.media/%s.png", rompath, res_copy);
 						had_thumb = 0;
 						startLoadThumb(thumbpath, onThumbLoaded, NULL);
+						videoPreviewArm(rompath, res_copy);
 						int max_w = (int)(screen->w - (screen->w * CFG_getGameArtWidth()));
 						int max_h = (int)(screen->h * 0.6);
 						int new_w = max_w;
@@ -3237,7 +3433,11 @@ int main (int argc, char *argv[]) {
 				}
 				SDL_UnlockMutex(bgMutex);
 				SDL_LockMutex(thumbMutex);
-				if(thumbbmp && thumbchanged) {
+				if(videoPreviewShowing()) {
+					// A video preview owns LAYER_THUMBNAIL and is redrawn by
+					// videoPreviewTick(); leave it alone.
+				}
+				else if(thumbbmp && thumbchanged) {
 					int img_w = thumbbmp->w;
 					int img_h = thumbbmp->h;
 					double aspect_ratio = (double)img_h / img_w;
@@ -3291,7 +3491,11 @@ int main (int argc, char *argv[]) {
 			}
 			SDL_UnlockMutex(bgMutex);
 			SDL_LockMutex(thumbMutex);
-			if(thumbbmp && thumbchanged) {
+			if(videoPreviewShowing()) {
+				// A video preview owns LAYER_THUMBNAIL and is redrawn by
+				// videoPreviewTick(); leave it alone.
+			}
+			else if(thumbbmp && thumbchanged) {
 				int img_w = thumbbmp->w;
 				int img_h = thumbbmp->h;
 				double aspect_ratio = (double)img_h / img_w;
@@ -3422,6 +3626,9 @@ int main (int argc, char *argv[]) {
 	PAD_quit();
 
 	// Cleanup worker threads and their synchronization primitives
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+	VIDP_shutdown();
+#endif
 	cleanupImageLoaderPool();
 
 	GFX_quit(); // Cleanup video subsystem first to stop GPU threads

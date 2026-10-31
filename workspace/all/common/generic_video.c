@@ -18,6 +18,9 @@
 #include "platform.h"
 #include "api.h"
 #include "utils.h"
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+#include "video/yuv2rgb.h"
+#endif
 #include <stdlib.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -1193,6 +1196,177 @@ void PLAT_drawOnLayer(SDL_Surface *inputSurface, int x, int y, int w, int h, flo
     SDL_DestroyTexture(tempTexture);
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+// Video previews in the game-art panel.
+//
+// One clip at a time, drawn into LAYER_THUMBNAIL at the same rectangle the
+// static cover art uses. The decode side lives in common/video/; everything
+// here is presentation.
+//
+// Colour conversion is done on the CPU, into an ARGB8888 streaming texture,
+// rather than by handing the three planes to SDL as an IYUV texture and letting
+// the fragment shader convert them. The shader path is cheaper, and on the
+// device this feature was first built for it produced badly shifted colour on
+// every clip with colour in it while greyscale clips stayed correct -- the
+// signature of the chroma channels being exchanged below the source that could
+// be read, in the driver's handling of single-channel textures.
+//
+// The H700 has a different GPU stack and may well not have that bug. Finding
+// out is a curiosity, not a requirement: converting here costs a few
+// milliseconds of CPU per frame for a panel of at most 324x288, and buys a path
+// that is known to be correct rather than one that should be. If it is ever
+// worth revisiting, this function is where to put the planes back and see
+// whether the colours survive.
+/////////////////////////////////////////////////////////////////////////////////////////
+
+// The decoder and the platform describe colour in two different vocabularies.
+// They must agree, and this is where that is enforced rather than assumed.
+_Static_assert(PLAT_YUV_BT601 == RG_YUV_BT601, "BT.601 differs from yuv2rgb.h");
+_Static_assert(PLAT_YUV_BT709 == RG_YUV_BT709, "BT.709 differs from yuv2rgb.h");
+_Static_assert(PLAT_YUV_FULL  == RG_YUV_FULL,  "full range differs from yuv2rgb.h");
+
+static struct {
+	SDL_Texture *texture;
+	int width;
+	int height;
+	unsigned generation;
+	int logged_failure;
+} video_layer;
+
+static SDL_Texture *video_layer_target(int layer)
+{
+	switch (layer) {
+	case 1: return vid.target_layer1;
+	case 2: return vid.target_layer2;
+	case 3: return vid.target_layer3;
+	case 4: return vid.target_layer4;
+	case 5: return vid.target_layer5;
+	default: return vid.target_layer1;
+	}
+}
+
+// The same shape GFX_ApplyRoundedCorners_8888 cuts out of the static cover art,
+// applied to a raw ARGB8888 buffer instead of an SDL_Surface.
+//
+// Corners matter because the static art has them: without this the picture
+// would visibly square off at the moment the video takes over, which is exactly
+// the jump the whole rectangle-matching exercise exists to avoid.
+//
+// Only the four corner squares are visited rather than the whole frame. A pixel
+// can only be cleared when it is inside both a horizontal and a vertical band,
+// so the rest of the frame is provably untouched -- and at 30 fps, walking a
+// 720x480 frame to write nothing is not free.
+static void video_round_corners(void *pixels, int pitch, int w, int h, int radius)
+{
+	if (radius <= 0 || w <= 0 || h <= 0) return;
+
+	// Bands wider than half the frame would overlap, and the original resolves
+	// that overlap by testing left-before-right and top-before-bottom. Nothing
+	// produces a radius that large -- it would be a circle, not a rounded
+	// rectangle -- so rather than reproduce that subtlety, decline it.
+	if (radius * 2 > w || radius * 2 > h) radius = (w < h ? w : h) / 2;
+	if (radius <= 0) return;
+
+	const int r2 = radius * radius;
+	for (int corner = 0; corner < 4; corner++) {
+		const int right = corner & 1;
+		const int bottom = (corner >> 1) & 1;
+		const int x0 = right ? w - radius : 0;
+		const int y0 = bottom ? h - radius : 0;
+
+		for (int row = 0; row < radius; row++) {
+			const int y = y0 + row;
+			const int dy = bottom ? y - (h - radius - 1) : radius - y;
+			uint32_t *out = (uint32_t *)((uint8_t *)pixels + (size_t)y * pitch);
+			const int dy2 = dy * dy;
+			for (int col = 0; col < radius; col++) {
+				const int x = x0 + col;
+				const int dx = right ? x - (w - radius - 1) : radius - x;
+				if (dx * dx + dy2 > r2) out[x] = 0;
+			}
+		}
+	}
+}
+
+void PLAT_freeVideoLayer(void)
+{
+	if (video_layer.texture) {
+		SDL_DestroyTexture(video_layer.texture);
+		video_layer.texture = NULL;
+	}
+	video_layer.width = 0;
+	video_layer.height = 0;
+	video_layer.generation = 0;
+}
+
+void PLAT_drawVideoFrameOnLayer(const uint8_t *y, const uint8_t *u, const uint8_t *v,
+	int ystride, int ustride, int vstride,
+	int width, int height, int yuv_mode, unsigned generation,
+	int x, int target_y, int w, int h, int radius, int layer)
+{
+	if (!vid.renderer || !y || !u || !v) return;
+	if (width <= 0 || height <= 0) return;
+
+	// A new clip means new dimensions and a new texture. Generation changes
+	// even when the size happens to match, so a different video never inherits
+	// the previous one's texture contents.
+	if (video_layer.texture &&
+		(video_layer.width != width ||
+		 video_layer.height != height ||
+		 video_layer.generation != generation)) {
+		SDL_DestroyTexture(video_layer.texture);
+		video_layer.texture = NULL;
+	}
+
+	if (!video_layer.texture) {
+		video_layer.texture = SDL_CreateTexture(vid.renderer,
+			SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+			width, height);
+		if (!video_layer.texture) {
+			// Once per session: a failure here would otherwise print on every
+			// frame of every clip.
+			if (!video_layer.logged_failure) {
+				video_layer.logged_failure = 1;
+				LOG_error("video preview: cannot create a %dx%d texture: %s\n",
+					width, height, SDL_GetError());
+			}
+			return;
+		}
+		video_layer.width = width;
+		video_layer.height = height;
+		video_layer.generation = generation;
+	}
+
+	// Written straight into the texture's own staging memory: locking avoids
+	// the intermediate buffer an SDL_UpdateTexture call would need.
+	void *pixels = NULL;
+	int pitch = 0;
+	if (SDL_LockTexture(video_layer.texture, NULL, &pixels, &pitch) != 0) {
+		if (!video_layer.logged_failure) {
+			video_layer.logged_failure = 1;
+			LOG_error("video preview: cannot lock the frame texture: %s\n",
+				SDL_GetError());
+		}
+		return;
+	}
+
+	rg_yuv420_to_argb(y, ystride, u, ustride, v, vstride,
+		width, height, yuv_mode, pixels, pitch);
+	video_round_corners(pixels, pitch, width, height, radius);
+
+	SDL_UnlockTexture(video_layer.texture);
+
+	// Blend mode is left at SDL_BLENDMODE_NONE, matching PLAT_drawOnLayer: the
+	// alpha the corners were cleared to is written into the layer verbatim, and
+	// layer 3 is itself composited with SDL_BLENDMODE_BLEND, so the corners come
+	// out transparent exactly as the static art's do.
+	SDL_SetRenderTarget(vid.renderer, video_layer_target(layer));
+	SDL_Rect destination = { x, target_y, w, h };
+	SDL_RenderCopy(vid.renderer, video_layer.texture, NULL, &destination);
+	SDL_SetRenderTarget(vid.renderer, NULL);
+}
+#endif
 
 void PLAT_animateSurface(
 	SDL_Surface *inputSurface,

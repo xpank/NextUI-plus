@@ -4399,8 +4399,19 @@ static void PWR_exitSleep(void)
 		SetVolume(GetVolume());
 	}
 	// reinitialize audio after sleep otherwise it doesnt come back on sometimes
-	LOG_info("Reinitialize audio after sleep\n");
-	SND_resetAudio(snd.sample_rate_in, snd.frame_rate);
+	//
+	// Only for a process that actually had audio. This was unconditional, and
+	// in nextui.elf -- which never calls SND_init -- it did not *re*-initialize
+	// anything, it created a device from nothing, at snd.sample_rate_in and
+	// snd.frame_rate of zero, and then held the ALSA PCM for the rest of the
+	// session. Nothing noticed while the launcher had no other use for audio.
+	// The video previews do: after one sleep and wake, every preview from then
+	// on failed to open its device with EBUSY and played silently.
+	if (snd.initialized)
+	{
+		LOG_info("Reinitialize audio after sleep\n");
+		SND_resetAudio(snd.sample_rate_in, snd.frame_rate);
+	}
 
 	sync();
 }

@@ -545,6 +545,16 @@ int main(int argc, char *argv[])
             []() -> std::any { return CFG_getShowGameArt(); },
             [](const std::any &value) { CFG_setShowGameArt(std::any_cast<bool>(value)); },
             []() { CFG_setShowGameArt(CFG_DEFAULT_SHOWGAMEART);}});
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+        appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Show game video", "Play a preview clip in the game art panel when the\nselection rests on a game that has one.", {false, true}, on_off,
+            []() -> std::any { return CFG_getShowGameVideo(); },
+            [](const std::any &value) { CFG_setShowGameVideo(std::any_cast<bool>(value)); },
+            []() { CFG_setShowGameVideo(CFG_DEFAULT_SHOWGAMEVIDEO);}});
+        appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Game video audio", "Play the preview clip's sound. Follows the system\nvolume and the mute switch.", {false, true}, on_off,
+            []() -> std::any { return CFG_getShowGameVideoAudio(); },
+            [](const std::any &value) { CFG_setShowGameVideoAudio(std::any_cast<bool>(value)); },
+            []() { CFG_setShowGameVideoAudio(CFG_DEFAULT_SHOWGAMEVIDEOAUDIO);}});
+#endif
         appearanceItems.push_back(new MenuItem{ListItemType::Generic, "Use folder background for ROMs", "If enabled, used the emulator background image. Otherwise uses the default.", {false, true}, on_off,
             []() -> std::any { return CFG_getRomsUseFolderBackground(); },
             [](const std::any &value) { CFG_setRomsUseFolderBackground(std::any_cast<bool>(value)); },
