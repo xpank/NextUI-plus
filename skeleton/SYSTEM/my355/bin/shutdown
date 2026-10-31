@@ -1,7 +1,13 @@
 #!/bin/sh
 
 cat /dev/zero > /dev/fb0
-poweroff
+# BaseOS owns charging-mode selection and orderly service shutdown here.
+# Keep the stock firmware fallback for cards that do not have this entry point.
+if [ -x /usr/sbin/poweroff ]; then
+	/usr/sbin/poweroff
+else
+	poweroff
+fi
 
 while :; do
 	sleep 5
