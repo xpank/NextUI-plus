@@ -18,6 +18,13 @@ $(PLATFORM):
 	cp -a ./workspace/$@/other/sdl2/output/libSDL2*.so* ./build/SYSTEM/$@/lib/
 	cp -a ./workspace/$@/other/sdl2/output/libtinyalsa.so* ./build/SYSTEM/$@/lib/ 2>/dev/null || true
 	cp -a ./workspace/$@/other/sdl2/output/libpng12.so* ./build/SYSTEM/$@/lib/
+	# ffmpeg for the game-art video previews, dlopen()ed by soname at first use.
+	# The card is FAT and cannot hold symlinks, so each library is installed under
+	# its soname as a real file -- that is the name dlopen asks for, and it is the
+	# name libavformat's own DT_NEEDED records for libavcodec.
+	cp -L ./workspace/$@/ffmpeg/output/lib/libavutil.so.58 ./build/SYSTEM/$@/lib/
+	cp -L ./workspace/$@/ffmpeg/output/lib/libavcodec.so.60 ./build/SYSTEM/$@/lib/
+	cp -L ./workspace/$@/ffmpeg/output/lib/libavformat.so.60 ./build/SYSTEM/$@/lib/
 	cp ./workspace/$@/other/evtest/evtest ./build/SYSTEM/$@/bin/
 	cp ./workspace/$@/other/jstest/jstest ./build/SYSTEM/$@/bin/
 	# Private curl runtime for stock Anbernic OS, which does not ship curl.
