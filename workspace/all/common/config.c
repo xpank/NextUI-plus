@@ -10,6 +10,30 @@
 
 NextUISettings settings = {0};
 
+// Loading the configuration must not write it back.
+//
+// CFG_init() populates the struct by calling the ordinary setters, and every
+// setter ends in CFG_sync(), which truncates minuisettings.txt and rewrites it
+// in full from the calling process's struct. Reading the configuration
+// therefore rewrote it -- roughly seventy full rewrites per process start on a
+// vfat card, and, far worse, a rewrite performed by whichever binary happened
+// to be doing the reading.
+//
+// That is what made "Auto power off" revert to Never. Nine binaries link this
+// file; launch.sh runs nextval.elf twice on every boot, minarch.elf runs on
+// every game launch, and each Tools pak runs its own. Only nextui.elf and
+// settings.elf had been rebuilt with the new key, so every one of the others
+// deleted the line simply by starting up -- its CFG_sync() has no fprintf for a
+// key it was compiled without -- after which nextui.elf wrote the default back.
+// Measured: `nextval.elf wifi` removes autoShutdownTimeout=900 from the file
+// and leaves suspendTimeout, a key it does know, untouched.
+//
+// With this flag, a key a binary was compiled without is ignored rather than
+// destroyed, so adding a setting no longer requires reshipping every binary
+// that links this file. The binaries already in the field still have to be
+// replaced once, because the damage is done by the code on the card.
+static bool cfg_loading = false;
+
 // deprecated
 uint32_t THEME_COLOR1_255;
 uint32_t THEME_COLOR2_255;
@@ -142,6 +166,10 @@ static void setPaletteNameRaw(const char *name);
 
 void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
 {
+    // Suppress the CFG_sync() that every setter below would otherwise perform.
+    // There is exactly one exit from this function, so this is balanced.
+    cfg_loading = true;
+
     CFG_defaults(&settings);
     settings.onFontChange = cb;
     settings.onColorSet = ccb;
@@ -540,6 +568,8 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
     // avoid reloading the font if not neccessary
     if (!fontLoaded)
         CFG_setFontFile(CFG_getFontFile());
+
+    cfg_loading = false;
 }
 
 const char* CFG_getFontFile(void)
@@ -1600,6 +1630,12 @@ void CFG_get(const char *key, char *value)
 
 void CFG_sync(void)
 {
+    // Loading is not saving. See cfg_loading above: without this, every binary
+    // that merely reads the configuration rewrites it, and drops any key it was
+    // compiled without.
+    if (cfg_loading)
+        return;
+
     // write to file
     char settingsPath[MAX_PATH];
     const char *shared_userdata = getenv("SHARED_USERDATA_PATH");
@@ -1610,10 +1646,42 @@ void CFG_sync(void)
     }
 
     snprintf(settingsPath, sizeof(settingsPath), "%s/minuisettings.txt", shared_userdata);
-    FILE *file = fopen(settingsPath, "w");
+
+    // Keep whatever is already in the file that this binary does not know about.
+    //
+    // CFG_sync() rewrites minuisettings.txt in full from this process's struct,
+    // so without this a binary compiled before a setting existed deletes that
+    // setting simply by saving -- and CFG_quit() is a bare CFG_sync(), so
+    // poweroff_next does it on every shutdown. The load guard above stops the
+    // reading half; this stops the writing half, and unlike the load guard it
+    // also covers deliberate saves.
+    //
+    // The content is built in memory first so the set of known keys is taken
+    // from what was actually just written, not from a hand-maintained list that
+    // could drift out of step with the fprintf calls below.
+    char *carried = NULL;
+    size_t carried_len = 0;
+    FILE *previous = fopen(settingsPath, "r");
+    if (previous != NULL)
+    {
+        FILE *keep = open_memstream(&carried, &carried_len);
+        if (keep != NULL)
+        {
+            char line[256];
+            while (fgets(line, sizeof(line), previous))
+                fputs(line, keep);
+            fclose(keep);
+        }
+        fclose(previous);
+    }
+
+    char *fresh = NULL;
+    size_t fresh_len = 0;
+    FILE *file = open_memstream(&fresh, &fresh_len);
     if (file == NULL)
     {
-        printf("[CFG] Unable to open settings file, cant write\n");
+        printf("[CFG] Unable to buffer settings, cant write\n");
+        free(carried);
         return;
     }
 
@@ -1690,6 +1758,51 @@ void CFG_sync(void)
     fprintf(file, "inputPromptStyle=%i\n", settings.inputPromptStyle);
 
     fclose(file);
+
+    FILE *out = fopen(settingsPath, "w");
+    if (out == NULL)
+    {
+        printf("[CFG] Unable to open settings file, cant write\n");
+        free(fresh);
+        free(carried);
+        return;
+    }
+    if (fresh != NULL)
+        fwrite(fresh, 1, fresh_len, out);
+
+    // Append any line from the old file whose key we did not just write.
+    for (char *line = carried; line != NULL && *line;)
+    {
+        char *eol = strchr(line, '\n');
+        size_t len = eol ? (size_t)(eol - line) + 1 : strlen(line);
+        char *eq = memchr(line, '=', len);
+        if (eq != NULL)
+        {
+            size_t keylen = (size_t)(eq - line) + 1;   // include the '='
+            bool known = false;
+            for (char *at = fresh; at != NULL && !known;)
+            {
+                if (strncmp(at, line, keylen) == 0)
+                    known = true;
+                at = strchr(at, '\n');
+                if (at)
+                    at++;
+                if (at && !*at)
+                    at = NULL;
+            }
+            if (!known)
+            {
+                fwrite(line, 1, len, out);
+                if (!eol)
+                    fputc('\n', out);
+            }
+        }
+        line = eol ? eol + 1 : NULL;
+    }
+
+    fclose(out);
+    free(fresh);
+    free(carried);
 }
 
 void CFG_print(void)
