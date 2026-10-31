@@ -8,6 +8,9 @@
 // Shared SDL streaming texture renderer and lazily loaded FFmpeg runtime.
 #define HAS_VIDEO_PREVIEWS 1
 
+// RK817 RTC alarm wake attribution must be validated before timed shutdown.
+#define HAS_SLEEP_AUTO_POWER_OFF 0
+
 ///////////////////////////////
 
 #ifdef SDL
