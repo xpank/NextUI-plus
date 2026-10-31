@@ -135,7 +135,10 @@ for b in nextui/build/h700/nextui.elf settings/build/h700/settings.elf \
          minarch/build/h700/minarch.elf nextval/build/h700/nextval.elf \
          battery/build/h700/battery.elf bootlogo/build/h700/bootlogo.elf \
          clock/build/h700/clock.elf minput/build/h700/minput.elf \
-         ledcontrol/build/h700/ledcontrol.elf; do
+         ledcontrol/build/h700/ledcontrol.elf gametime/build/h700/gametime.elf \
+         batmon/build/h700/batmon.elf gametimectl/build/h700/gametimectl.elf \
+         ../h700/poweroff_next/build/h700/poweroff_next.elf \
+         ../h700/poweroff_next/build/h700/reboot_next.elf; do
 	f="$here/workspace/all/$b"
 	[ -f "$f" ] || continue
 	built=$((built+1))
