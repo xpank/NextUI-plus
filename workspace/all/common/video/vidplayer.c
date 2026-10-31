@@ -1107,25 +1107,17 @@ void VIDP_stopAndWait(void) {
 	// exactly the same way. An asynchronous VIDP_stop() would not do: the main
 	// thread would suspend the machine while the worker was still closing.
 	pthread_mutex_lock(&vidp_mutex);
-	struct timespec deadline;
-	clock_gettime(CLOCK_REALTIME, &deadline);
-	deadline.tv_sec += 1;
-	// Bounded, because failing to sleep is worse than sleeping with the device
-	// open. A worker wedged for a second has a problem this cannot fix.
-	while (!vidp_worker_idle && !vidp_shutdown) {
-		if (pthread_cond_timedwait(&vidp_idle_cond, &vidp_mutex, &deadline) ==
-			ETIMEDOUT) {
-			LOG_info("video preview: worker did not go idle before sleep\n");
-			break;
-		}
-	}
-	pthread_mutex_unlock(&vidp_mutex);
+	// A previously idle worker must consume the stop request too. Never close
+	// while it may still be opening, decoding, or releasing a clip.
+	while (!vidp_worker_idle || vidp_request_pending)
+		pthread_cond_wait(&vidp_idle_cond, &vidp_mutex);
 
 	// The worker is parked, so nothing else touches the device and closing it
 	// from here is safe. It has to be closed rather than left idle: a PCM held
 	// across suspend-to-RAM is exactly what PWR_enterSleep() closes its own
 	// device to avoid, and the linger above would not have expired yet.
 	VIDA_close();
+	pthread_mutex_unlock(&vidp_mutex);
 }
 
 void VIDP_shutdown(void) {

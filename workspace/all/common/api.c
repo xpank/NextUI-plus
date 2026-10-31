@@ -185,6 +185,9 @@ static struct PWR_Context
 	int requested_sleep;
 	int requested_wake;
 	int resume_tick;
+	int restore_audio_after_sleep;
+	PWR_callback_t before_sleep;
+	PWR_callback_t before_poweroff;
 
 	pthread_t battery_pt;
 	SDL_atomic_t is_charging;
@@ -4290,10 +4293,18 @@ void PWR_disablePowerOff(void)
 {
 	pwr.can_poweroff = 0;
 }
+void PWR_setTransitionCallbacks(PWR_callback_t before_sleep, PWR_callback_t before_poweroff)
+{
+	pwr.before_sleep = before_sleep;
+	pwr.before_poweroff = before_poweroff;
+}
+
 void PWR_powerOff(int reboot)
 {
 	if (pwr.can_poweroff)
 	{
+		if (pwr.before_poweroff)
+			pwr.before_poweroff();
 
 		int w = FIXED_WIDTH;
 		int h = FIXED_HEIGHT;
@@ -4342,6 +4353,8 @@ void PWR_powerOff(int reboot)
 
 static void PWR_enterSleep(void)
 {
+	// SND_quit clears initialized; remember ownership before closing it.
+	pwr.restore_audio_after_sleep = snd.initialized;
 #if defined(SND_CLOSE_ON_SLEEP) && SND_CLOSE_ON_SLEEP
 	// On H700, fully close the audio device before sleeping: a PCM left open
 	// across suspend-to-RAM ends up in a state SDL takes ~10s to close on
@@ -4400,18 +4413,14 @@ static void PWR_exitSleep(void)
 	}
 	// reinitialize audio after sleep otherwise it doesnt come back on sometimes
 	//
-	// Only for a process that actually had audio. This was unconditional, and
-	// in nextui.elf -- which never calls SND_init -- it did not *re*-initialize
-	// anything, it created a device from nothing, at snd.sample_rate_in and
-	// snd.frame_rate of zero, and then held the ALSA PCM for the rest of the
-	// session. Nothing noticed while the launcher had no other use for audio.
-	// The video previews do: after one sleep and wake, every preview from then
-	// on failed to open its device with EBUSY and played silently.
-	if (snd.initialized)
+	// Restore game audio that existed before sleep without opening a new
+	// device in a frontend that only used the preview player's separate PCM.
+	if (pwr.restore_audio_after_sleep)
 	{
 		LOG_info("Reinitialize audio after sleep\n");
 		SND_resetAudio(snd.sample_rate_in, snd.frame_rate);
 	}
+	pwr.restore_audio_after_sleep = 0;
 
 	sync();
 }
@@ -4471,6 +4480,8 @@ static void PWR_waitForWake(void)
 }
 void PWR_sleep(void)
 {
+	if (pwr.before_sleep)
+		pwr.before_sleep();
 	LOG_info("Entering hybrid sleep\n");
 
 	system("gametimectl.elf stop_all");

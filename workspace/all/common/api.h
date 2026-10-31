@@ -564,6 +564,9 @@ void VIB_triplePulse(int strength, int duration_ms, int gap_ms);
 typedef void (*PWR_callback_t)();
 void PWR_init(void);
 void PWR_quit(void);
+// Process-wide resource cleanup for every sleep/poweroff entry point, including
+// direct menu actions and platform quit events. Defaults to no callbacks.
+void PWR_setTransitionCallbacks(PWR_callback_t before_sleep, PWR_callback_t before_poweroff);
 
 int PWR_ignoreSettingInput(int btn, int show_setting);
 void PWR_update(int* dirty, int* show_setting, PWR_callback_t before_sleep, PWR_callback_t after_sleep);

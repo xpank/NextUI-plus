@@ -311,9 +311,9 @@ fi
 # ten seconds to close. A preview's device is a second PCM that call knows
 # nothing about, so nextui.c has to close it through PWR_update's before_sleep
 # hook -- and synchronously, or the machine suspends mid-teardown.
-grep -qF 'PWR_update(&dirty, &show_setting, videoPreviewBeforeSleep, NULL);' "$nextui_c" \
+grep -qF 'PWR_setTransitionCallbacks(videoPreviewBeforeSleep, videoPreviewBeforePowerOff);' "$nextui_c" \
 	&& note "sleep runs videoPreviewBeforeSleep first" \
-	|| bad "PWR_update no longer stops the preview before sleeping"
+	|| bad "power transitions no longer stop the preview before sleeping or shutting down"
 strip_c "$nextui_c" | awk '/^static void videoPreviewBeforeSleep/,/^}/' >"$tmp/beforesleep"
 grep -qF 'VIDP_stopAndWait();' "$tmp/beforesleep" \
 	&& note "and waits for the audio device to actually close" \
@@ -330,7 +330,7 @@ grep -qF 'VIDP_stopAndWait();' "$tmp/beforesleep" \
 # played silently. The guard is what stops that coming back.
 strip_c "$api_c" | awk '/^static void PWR_exitSleep/,/^}/' >"$tmp/exitsleep"
 if grep -qF 'SND_resetAudio' "$tmp/exitsleep"; then
-	if grep -qF 'if (snd.initialized)' "$tmp/exitsleep"; then
+	if grep -qF 'if (pwr.restore_audio_after_sleep)' "$tmp/exitsleep"; then
 		note "waking only reinitialises audio in a process that had some"
 	else
 		bad "PWR_exitSleep reinitialises audio unconditionally; that takes the ALSA PCM away from previews for the rest of the session"

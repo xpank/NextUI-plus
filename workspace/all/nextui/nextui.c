@@ -2204,11 +2204,14 @@ static void videoPreviewBeforeSleep(void) {
 	videoPreviewStop();
 	VIDP_stopAndWait();
 }
+static void videoPreviewBeforePowerOff(void) {
+	videoPreviewStop();
+	VIDP_shutdown();
+}
 #else
 static int videoPreviewShowing(void) { return 0; }
 static void videoPreviewArm(const char *rompath, const char *name) { (void)rompath; (void)name; }
 static int videoPreviewTick(int currentScreen) { (void)currentScreen; return 0; }
-static void videoPreviewBeforeSleep(void) {}
 #endif
 
 SDL_Rect pillRect;
@@ -2443,6 +2446,9 @@ int main (int argc, char *argv[]) {
 	// LOG_info("- input init: %lu\n", SDL_GetTicks() - main_begin);
 	VIB_init();
 	PWR_init();
+#if defined(HAS_VIDEO_PREVIEWS) && HAS_VIDEO_PREVIEWS
+	PWR_setTransitionCallbacks(videoPreviewBeforeSleep, videoPreviewBeforePowerOff);
+#endif
 	if (!HAS_POWER_BUTTON && !simple_mode) PWR_disableSleep();
 	// LOG_info("- power init: %lu\n", SDL_GetTicks() - main_begin);
 
@@ -2512,7 +2518,7 @@ int main (int argc, char *argv[]) {
 		int selected = top->selected;
 		int total = top->entries->count;
 
-		PWR_update(&dirty, &show_setting, videoPreviewBeforeSleep, NULL);
+		PWR_update(&dirty, &show_setting, NULL, NULL);
 
 		// user-assignable buttons, handled before the per-screen input so they work
 		// from the game list, the game switcher and the quick menu alike.
