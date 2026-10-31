@@ -130,7 +130,7 @@ check $? "config.c: CFG_init still has a single exit, so the guard cannot leak"
 
 # Every binary that links config.c must know the key, or it deletes it. Checked
 # against the built artefacts when they are present.
-built=0; missing=""
+built=0; serializers=0; missing=""
 for b in nextui/build/h700/nextui.elf settings/build/h700/settings.elf \
          minarch/build/h700/minarch.elf nextval/build/h700/nextval.elf \
          battery/build/h700/battery.elf bootlogo/build/h700/bootlogo.elf \
@@ -142,15 +142,18 @@ for b in nextui/build/h700/nextui.elf settings/build/h700/settings.elf \
 	f="$here/workspace/all/$b"
 	[ -f "$f" ] || continue
 	built=$((built+1))
-	if grep -qa 'suspendTimeout=%i' "$f" && ! grep -qa 'autoShutdownTimeout=%i' "$f"; then
-		missing="$missing $(basename "$f")"
+	if grep -qa 'suspendTimeout=%i' "$f"; then
+		serializers=$((serializers+1))
+		if ! grep -qa 'autoShutdownTimeout=%i' "$f"; then
+			missing="$missing $(basename "$f")"
+		fi
 	fi
 done
 if [ "$built" = 0 ]; then
 	printf '  --   no built binaries present, skipping the config-writer check\n'
 else
 	[ -z "$missing" ]
-	check $? "all $built built config.c binaries know the key (offenders:${missing:- none})"
+	check $? "all $serializers settings serializers among $built built targets know the key (offenders:${missing:- none})"
 fi
 
 has "$API_C" "PWR_DEEPSLEEP_AUTO_SHUTDOWN"                                "api.c: the shutdown request is distinguished from a suspend failure"
