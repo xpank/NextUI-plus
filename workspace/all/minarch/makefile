@@ -60,9 +60,11 @@ else
 LDFLAGS += -lzip -lz
 endif # Linux
 else # all handheld platforms
-LDFLAGS	 +=  -Llibretro-common -lsrm -lzip -lz
+LDFLAGS  += -Llibretro-common -lsrm -lzip -lz
 CFLAGS   += -DHAS_SRM
-LDFLAGS +=  -lasound
+ifneq ($(PLATFORM),my355)
+LDFLAGS += -lasound
+endif
 endif
 
 # RA support: rcheevos and libchdr linking
@@ -149,7 +151,7 @@ $(PREFIX_LOCAL)/include/msettings.h:
 ### libsrm stuff
 OBJECTS = streams/rzip_stream.o streams/file_stream.o vfs/vfs_implementation.o file/file_path.o file/file_path_io.o compat/compat_strl.o time/rtime.o string/stdstring.o encodings/encoding_utf.o streams/trans_stream.o streams/trans_stream_pipe.o streams/trans_stream_zlib.o
 
-$(OBJECTS) : 
+$(OBJECTS) :
 	cd libretro-common && $(CC) $(CFLAGS) -DHAVE_ZLIB -c -o $@ $(subst .o,.c,$@) -I include/
 
 libsrm.a: $(OBJECTS)

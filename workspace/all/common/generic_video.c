@@ -783,6 +783,10 @@ static void clearVideo(void) {
 
 void PLAT_quitVideo(void) {
 	clearVideo();
+#ifdef PLATFORM_MY355
+	// DRM restores fbdev on quit; clear it while we still own the display.
+	system("cat /dev/zero > /dev/fb0 2>/dev/null");
+#endif
 
 	// Make sure the GL context is current before tearing down textures/renderer
 	SDL_GL_MakeCurrent(vid.window, vid.gl_context);
@@ -818,7 +822,9 @@ void PLAT_quitVideo(void) {
 	if (overlay_path) free(overlay_path);
 
 	SDL_QuitSubSystem(SDL_INIT_VIDEO);
+#ifndef PLATFORM_MY355
 	system("cat /dev/zero > /dev/fb0 2>/dev/null");
+#endif
 }
 
 void PLAT_clearVideo(SDL_Surface* screen) {

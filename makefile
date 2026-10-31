@@ -12,7 +12,7 @@ endif
 
 ifeq (,$(PLATFORMS))
 #PLATFORMS = miyoomini trimuismart rg35xx rg35xxplus my355 tg5040 zero28 rgb30 m17 gkdpixel my282 magicmini
-PLATFORMS = tg5050 tg5040 h700
+PLATFORMS = tg5050 tg5040 h700 my355
 endif
 
 ###########################################################
@@ -132,9 +132,14 @@ ifneq (,$(filter $(PLATFORM),tg5040 tg5050 h700 my355))
 	cp ./workspace/all/minarch/build/$(PLATFORM)/libchdr.so.* ./build/SYSTEM/$(PLATFORM)/lib/
 	cp ./workspace/all/minarch/build/$(PLATFORM)/libcrypto.so.* ./build/SYSTEM/$(PLATFORM)/lib/
 
-ifneq (,$(filter $(PLATFORM),tg5040 h700))
+ifneq (,$(filter $(PLATFORM),tg5040 h700 my355))
 	# liblz4 for Rewind support
 	cp -L ./workspace/all/minarch/build/$(PLATFORM)/liblz4.so.1 ./build/SYSTEM/$(PLATFORM)/lib/
+endif
+ifeq ($(PLATFORM), my355)
+	cp ./workspace/all/minarch/build/$(PLATFORM)/libtinyalsa.* ./build/SYSTEM/$(PLATFORM)/lib/
+	cp ./workspace/all/minarch/build/$(PLATFORM)/libsqlite3.* ./build/SYSTEM/$(PLATFORM)/lib/
+	cp ./workspace/all/minarch/build/$(PLATFORM)/libffi.* ./build/SYSTEM/$(PLATFORM)/lib/
 endif
 endif
 
@@ -213,18 +218,21 @@ done:
 special:
 	# setup miyoomini/trimui/magicx family .tmp_update in BOOT
 	mv ./build/BOOT/common ./build/BOOT/.tmp_update
-#	mv ./build/BOOT/miyoo ./build/BASE/
+	mv ./build/BOOT/miyoo355 ./build/BASE/
 	mv ./build/BOOT/trimui ./build/BASE/
 #	mv ./build/BOOT/magicx ./build/BASE/
-#	cp -R ./build/BOOT/.tmp_update ./build/BASE/miyoo/app/
+	cp -R ./build/BOOT/.tmp_update ./build/BASE/miyoo355/app/
+	rm -rf ./build/BASE/miyoo355/app/.tmp_update/tg* ./build/BASE/miyoo355/app/.tmp_update/h700*
 	cp -R ./build/BOOT/.tmp_update ./build/BASE/trimui/app/
+	rm -rf ./build/BASE/trimui/app/.tmp_update/my355*
 #	cp -R ./build/BOOT/.tmp_update ./build/BASE/magicx/
 #	cp -R ./build/BASE/miyoo ./build/BASE/miyoo354
 #	cp -R ./build/BASE/miyoo ./build/BASE/miyoo355
-#ifneq (,$(findstring my355, $(PLATFORMS)))
-#	cp -R ./workspace/my355/init ./build/BASE/miyoo355/app/my355
-#	cp -r ./workspace/my355/other/squashfs/output/* ./build/BASE/miyoo355/app/my355/payload/
-#endif
+ifneq (,$(findstring my355, $(PLATFORMS)))
+	cp -R ./workspace/my355/init ./build/BASE/miyoo355/app/my355
+	cp -r ./workspace/my355/other/squashfs/output/* ./build/BASE/miyoo355/app/my355/payload/
+	cp ./workspace/all/show2/build/my355/show2.elf ./build/BASE/miyoo355/app/my355/payload/bin/
+endif
 
 tidy:
 	rm -f releases/$(RELEASE_NAME)-base.zip 
@@ -272,7 +280,7 @@ package: tidy
 	
 	# TODO: can I just add everything in BASE to zip?
 	# cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME)-base.zip Bios Roms Saves miyoo miyoo354 trimui rg35xx rg35xxplus gkdpixel miyoo355 magicx em_ui.sh MinUI.zip README.txt
-	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME)-base.zip Bios Roms Saves Shaders Overlays trimui h700 em_ui.sh MinUI.zip *.pakz README.txt
+	cd ./build/BASE && zip -r ../../releases/$(RELEASE_NAME)-base.zip Bios Roms Saves Shaders Overlays trimui h700 miyoo355 em_ui.sh MinUI.zip *.pakz README.txt
 	cd ./build/EXTRAS && zip -r ../../releases/$(RELEASE_NAME)-extras.zip Bios Emus Roms Saves Shaders Overlays Tools README.txt
 	echo "$(RELEASE_VERSION)" > ./build/latest.txt
 
