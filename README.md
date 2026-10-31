@@ -1,3 +1,11 @@
+# NextUI-plus
+
+Unofficial NextUI fork, tested on RGSP. Adds optional video/audio previews, sleep auto-off, settings fixes, and BaseOS shutdown support.
+
+Downloads: [fork releases](https://github.com/xpank/NextUI-plus/releases).
+
+---
+
 <div align="center">
 
   <img width=128px src="github/logo_outline.png">
