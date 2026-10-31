@@ -30,13 +30,32 @@ h700_setup_runtime
 
 #######################################
 
+h700_shutdown() {
+	case "$1" in
+		poweroff|reboot) ;;
+		*) return 2 ;;
+	esac
+
+	# Modern BaseOS records the requested action and lets init quiesce writers
+	# before rcK safely cuts power. Never fall back to a direct PMIC cut after
+	# invoking it, even if the request fails.
+	if [ -x "/usr/sbin/baseos-$1" ]; then
+		exec "/usr/sbin/baseos-$1"
+	fi
+
+	# Preserve stock and older BaseOS support when the init helpers are absent.
+	case "$1" in
+		poweroff) poweroff_next || poweroff ;;
+		reboot) reboot_next || reboot ;;
+	esac
+	exit $?
+}
+
 if [ -f "/tmp/poweroff" ]; then
-	poweroff_next || poweroff
-	exit 0
+	h700_shutdown poweroff
 fi
 if [ -f "/tmp/reboot" ]; then
-	reboot_next || reboot
-	exit 0
+	h700_shutdown reboot
 fi
 
 #######################################
@@ -156,13 +175,11 @@ while [ -f "$EXEC_PATH" ]; do
 	fi
 
 	if [ -f "/tmp/poweroff" ]; then
-		poweroff_next || poweroff
-		exit 0
+		h700_shutdown poweroff
 	fi
 	if [ -f "/tmp/reboot" ]; then
-		reboot_next || reboot
-		exit 0
+		h700_shutdown reboot
 	fi
 done
 
-poweroff_next || poweroff
+h700_shutdown poweroff
